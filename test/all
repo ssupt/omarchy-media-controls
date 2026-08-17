@@ -18,12 +18,13 @@ for source in sys.argv[1:]:
 print("PASS: helper syntax")
 PY
 
-node - "$ROOT/Model.js" "$ROOT/BarWidget.qml" "$ROOT/PlayerWindow.qml" <<'JS'
+node - "$ROOT/Model.js" "$ROOT/BarWidget.qml" "$ROOT/PlayerWindow.qml" "$ROOT/Service.qml" <<'JS'
 const assert = require('node:assert/strict')
 const fs = require('node:fs')
 const model = require(process.argv[2])
 const barSource = fs.readFileSync(process.argv[3], 'utf8')
 const windowSource = fs.readFileSync(process.argv[4], 'utf8')
+const serviceSource = fs.readFileSync(process.argv[5], 'utf8')
 
 assert.equal(model.metadataText({ 'xesam:url': 'file:///music/song.flac' }, 'xesam:url'), 'file:///music/song.flac')
 assert.equal(model.metadataText({ 'xesam:artist': ['One', 'Two'] }, 'xesam:artist'), 'One, Two')
@@ -54,6 +55,9 @@ assert.match(barSource, /root\.openDetails\(\)/)
 assert.match(windowSource, /requestLyrics/)
 assert.match(windowSource, /root\.lyricsDisplayText\(\)/)
 assert.match(windowSource, /activePlayer\.position = next/)
+assert.match(serviceSource, /Quickshell\.Services\.Mpris/)
+assert.match(serviceSource, /readonly property var players: Mpris\.players/)
+assert.match(serviceSource, /target: "media"/)
 console.log('PASS: media model and UI contract')
 JS
 

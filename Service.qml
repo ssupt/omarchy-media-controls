@@ -1,19 +1,20 @@
 import QtQuick
 import Quickshell
 import Quickshell.Io
+import Quickshell.Services.Mpris
 import "Model.js" as Model
 
 Item {
   id: root
 
   property var shell: null
-  readonly property var mediaService: shell ? shell.firstPartyServiceFor("omarchy.media") : null
-  readonly property var activePlayer: mediaService ? mediaService.activePlayer : null
-  readonly property var sourcePlayers: mediaService ? mediaService.sourcePlayers : []
+  property string preferredPlayerKey: ""
+  readonly property var players: Mpris.players ? Mpris.players.values : []
+  readonly property var sourcePlayers: orderedPlayers()
+  readonly property var activePlayer: selectActivePlayer()
   readonly property bool hasMedia: activePlayer !== null
     && (activePlayer.trackTitle || activePlayer.trackArtist || activePlayer.trackAlbum)
-  readonly property string playerKey: mediaService && activePlayer
-    ? mediaService.playerKey(activePlayer) : ""
+  readonly property string activePlayerKey: playerKey(activePlayer)
   readonly property string title: activePlayer ? String(activePlayer.trackTitle || "") : ""
   readonly property string artist: activePlayer ? String(activePlayer.trackArtist || "") : ""
   readonly property string album: activePlayer ? String(activePlayer.trackAlbum || "") : ""
@@ -41,13 +42,166 @@ Item {
     return decodeURIComponent(url.replace(/^file:\/\//, ""))
   }
 
+  function isProxyPlayer(player) {
+    if (!player) return false
+    var dbusName = String(player.dbusName || "").toLowerCase()
+    var desktopEntry = String(player.desktopEntry || "").toLowerCase()
+    return dbusName.indexOf("playerctld") !== -1 || desktopEntry === "playerctld"
+  }
+
+  function hasMetadata(player) {
+    return !!(player && (player.trackTitle || player.trackArtist || player.trackAlbum
+      || player.identity || player.desktopEntry))
+  }
+
+  function hasTrackMetadata(player) {
+    return !!(player && (player.trackTitle || player.trackArtist || player.trackAlbum
+      || player.trackArtUrl))
+  }
+
+  function playerKey(player) {
+    return player ? String(player.dbusName || player.desktopEntry || player.identity || "") : ""
+  }
+
+  function playerForKey(key) {
+    if (!key) return null
+    for (var i = 0; i < players.length; i++) {
+      if (playerKey(players[i]) === key) return players[i]
+    }
+    return null
+  }
+
+  function canHandleAction(player, action) {
+    if (!player) return false
+    if (action === "next") return !!player.canGoNext
+    if (action === "previous") return !!player.canGoPrevious
+    if (action === "play") return !!(player.canPlay || player.canTogglePlaying)
+    if (action === "pause") return !!(player.canPause || player.canTogglePlaying)
+    if (action === "playPause")
+      return !!(player.canTogglePlaying || player.canPlay || player.canPause)
+    return false
+  }
+
+  function orderedPlayers() {
+    var ordered = []
+    for (var i = 0; i < players.length; i++) {
+      if (hasMetadata(players[i])) ordered.push(players[i])
+    }
+    ordered.sort(function(left, right) {
+      var leftPreferred = playerKey(left) === preferredPlayerKey
+      var rightPreferred = playerKey(right) === preferredPlayerKey
+      if (!!left.isPlaying !== !!right.isPlaying) return left.isPlaying ? -1 : 1
+      if (leftPreferred !== rightPreferred) return leftPreferred ? -1 : 1
+      if (isProxyPlayer(left) !== isProxyPlayer(right)) return isProxyPlayer(left) ? 1 : -1
+      var leftLabel = String(left.trackTitle || left.identity || left.desktopEntry || "")
+      var rightLabel = String(right.trackTitle || right.identity || right.desktopEntry || "")
+      return leftLabel.localeCompare(rightLabel)
+    })
+    return ordered
+  }
+
+  function selectActivePlayer() {
+    var preferred = playerForKey(preferredPlayerKey)
+    if (hasMetadata(preferred) && preferred.isPlaying) return preferred
+
+    var playingProxy = null
+    var trackPlayer = null
+    var trackProxy = null
+    var fallbackProxy = null
+    var fallback = null
+
+    for (var i = 0; i < players.length; i++) {
+      var player = players[i]
+      if (!hasMetadata(player)) continue
+      var proxy = isProxyPlayer(player)
+      if (player.isPlaying) {
+        if (!proxy) return player
+        if (!playingProxy) playingProxy = player
+      } else if (hasTrackMetadata(player)) {
+        if (!proxy && !trackPlayer) trackPlayer = player
+        else if (proxy && !trackProxy) trackProxy = player
+      } else if (!proxy && !fallback) {
+        fallback = player
+      } else if (proxy && !fallbackProxy) {
+        fallbackProxy = player
+      }
+    }
+
+    return playingProxy || (hasMetadata(preferred) ? preferred : null)
+      || trackPlayer || trackProxy || fallback || fallbackProxy
+  }
+
+  function playerForAction(action, targetKey) {
+    var targeted = playerForKey(targetKey)
+    if (targeted && canHandleAction(targeted, action)) return targeted
+
+    if (action === "pause" || action === "playPause") {
+      for (var i = 0; i < sourcePlayers.length; i++) {
+        if (sourcePlayers[i].isPlaying && canHandleAction(sourcePlayers[i], action))
+          return sourcePlayers[i]
+      }
+    }
+
+    if (canHandleAction(activePlayer, action)) return activePlayer
+    for (var j = 0; j < sourcePlayers.length; j++) {
+      if (canHandleAction(sourcePlayers[j], action)) return sourcePlayers[j]
+    }
+    return activePlayer
+  }
+
   function runAction(action) {
-    if (!mediaService) return false
-    return mediaService.runAction(action, false, playerKey)
+    var player = playerForAction(action, activePlayerKey)
+    var handled = false
+    if (action === "next" && player && player.canGoNext) {
+      player.next()
+      handled = true
+    } else if (action === "previous" && player && player.canGoPrevious) {
+      player.previous()
+      handled = true
+    } else if (action === "play" && player) {
+      if (player.canPlay) player.play()
+      else if (player.canTogglePlaying && !player.isPlaying) player.togglePlaying()
+      else return false
+      handled = true
+    } else if (action === "pause" && player) {
+      if (player.canPause) player.pause()
+      else if (player.canTogglePlaying && player.isPlaying) player.togglePlaying()
+      else return false
+      handled = true
+    } else if (action === "playPause" && player) {
+      if (player.isPlaying && player.canPause) player.pause()
+      else if (!player.isPlaying && player.canPlay) player.play()
+      else if (player.canTogglePlaying) player.togglePlaying()
+      else return false
+      handled = true
+    }
+    if (handled) preferredPlayerKey = playerKey(player)
+    return handled
   }
 
   function selectPlayer(key) {
-    return mediaService ? mediaService.selectPlayer(key) : false
+    var player = playerForKey(key)
+    if (!hasMetadata(player)) return false
+    preferredPlayerKey = playerKey(player)
+    return true
+  }
+
+  function statusJson() {
+    var player = activePlayer
+    return JSON.stringify({
+      hasPlayer: player !== null,
+      hasMedia: hasMedia,
+      playing: player ? !!player.isPlaying : false,
+      identity: player ? String(player.identity || "") : "",
+      desktopEntry: player ? String(player.desktopEntry || "") : "",
+      title: title,
+      artist: artist,
+      album: album,
+      artUrl: artUrl,
+      canGoNext: player ? !!player.canGoNext : false,
+      canGoPrevious: player ? !!player.canGoPrevious : false,
+      canTogglePlaying: player ? !!player.canTogglePlaying : false
+    })
   }
 
   function refreshTrack() {
@@ -157,5 +311,17 @@ Item {
         }
       }
     }
+  }
+
+  IpcHandler {
+    target: "media"
+
+    function status(): string { return root.statusJson() }
+    function playPause(): string { return root.runAction("playPause") ? "ok" : "unhandled" }
+    function next(): string { return root.runAction("next") ? "ok" : "unhandled" }
+    function previous(): string { return root.runAction("previous") ? "ok" : "unhandled" }
+    function play(): string { return root.runAction("play") ? "ok" : "unhandled" }
+    function pause(): string { return root.runAction("pause") ? "ok" : "unhandled" }
+    function ping(): string { return "ok" }
   }
 }

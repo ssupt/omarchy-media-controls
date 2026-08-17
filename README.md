@@ -5,8 +5,8 @@ album artwork, track information, and direct previous/play-pause/next controls.
 Click the artwork or track name to open a focused player window with larger art,
 playback progress, and lyrics.
 
-It uses Omarchy's MPRIS service, so it works with Spotify and any other player
-that exposes the standard Linux MPRIS interface—including local-file players.
+It talks directly to MPRIS, so it works with Spotify and any other player that
+exposes the standard Linux media interface—including local-file players.
 The widget adapts automatically to top, bottom, left, and right bars. On a side
 bar the title rotates into the rail while the artwork and controls stack
 vertically.
@@ -39,8 +39,9 @@ tries the file's embedded cover.
 omarchy plugin add https://github.com/ssupt/omarchy-media-controls.git --enable
 ```
 
-Enabling the plugin replaces Omarchy's built-in `omarchy.media` bar widget while
-continuing to use its first-party player-selection service.
+Enabling the plugin replaces Omarchy's built-in `omarchy.media` widget. Its own
+player-selection service keeps the controls available even though the built-in
+media plugin is disabled as part of that replacement.
 
 ## Controls
 
