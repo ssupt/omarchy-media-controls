@@ -1,0 +1,301 @@
+#!/usr/bin/python3
+
+import argparse
+import difflib
+import hashlib
+import json
+import os
+from pathlib import Path
+import re
+import subprocess
+import sys
+import time
+import unicodedata
+from urllib.error import HTTPError, URLError
+from urllib.parse import unquote, urlencode, urlparse
+from urllib.request import Request, urlopen
+
+
+USER_AGENT = "Omarchy Media Controls/0.1.0 (https://github.com/ssupt/omarchy-media-controls)"
+NOT_FOUND_TTL = 6 * 60 * 60
+LYRIC_TAG_PRIORITY = (
+    "lyrics", "unsyncedlyrics", "unsyncedlyric", "lyric", "wmlyrics",
+    "syncedlyrics", "syncedlyric",
+)
+
+
+def response(status: str, lyrics: str = "", synced: str = "", source: str = "", message: str = "") -> dict:
+    return {
+        "status": status,
+        "lyrics": normalize_lyrics(lyrics),
+        "syncedLyrics": normalize_lyrics(synced),
+        "source": source,
+        "message": message,
+    }
+
+
+def normalize_lyrics(value: object) -> str:
+    if value is None:
+        return ""
+    return str(value).replace("\r\n", "\n").replace("\r", "\n").strip()
+
+
+def plain_from_synced(value: str) -> str:
+    output: list[str] = []
+    for raw_line in normalize_lyrics(value).splitlines():
+        if re.match(r"^\s*\[(ar|al|ti|by|offset|re|ve|length):", raw_line, re.IGNORECASE):
+            continue
+        line = re.sub(r"^\s*(\[\d{1,3}:\d{2}(?:[.:]\d{1,3})?\])+\s*", "", raw_line)
+        output.append(re.sub(r"<[^>]+>", "", line))
+    return normalize_lyrics("\n".join(output))
+
+
+def normalized_tag_key(value: object) -> str:
+    return re.sub(r"[^a-z]", "", str(value).lower())
+
+
+def lyrics_from_probe(payload: dict) -> tuple[str, str]:
+    tags: dict[str, str] = {}
+    sections = [payload.get("format", {})]
+    sections.extend(payload.get("streams", []) if isinstance(payload.get("streams"), list) else [])
+    for section in sections:
+        raw_tags = section.get("tags", {}) if isinstance(section, dict) else {}
+        if not isinstance(raw_tags, dict):
+            continue
+        for key, value in raw_tags.items():
+            normalized = normalized_tag_key(key)
+            text = normalize_lyrics(value)
+            if text and normalized not in tags:
+                tags[normalized] = text
+
+    for wanted in LYRIC_TAG_PRIORITY:
+        if wanted not in tags:
+            continue
+        value = tags[wanted]
+        if wanted.startswith("synced") or re.search(r"\[\d{1,3}:\d{2}(?:[.:]\d+)?\]", value):
+            return plain_from_synced(value), value
+        return value, ""
+
+    for key, value in tags.items():
+        if "lyric" not in key:
+            continue
+        if "synced" in key or re.search(r"\[\d{1,3}:\d{2}(?:[.:]\d+)?\]", value):
+            return plain_from_synced(value), value
+        return value, ""
+    return "", ""
+
+
+def local_path(uri: str) -> Path | None:
+    parsed = urlparse(uri or "")
+    if parsed.scheme != "file":
+        return None
+    return Path(unquote(parsed.path))
+
+
+def local_lyrics(uri: str) -> dict | None:
+    track = local_path(uri)
+    if not track or not track.is_file():
+        return None
+
+    for suffix in (".lrc", ".txt"):
+        sidecar = track.with_suffix(suffix)
+        if not sidecar.is_file():
+            continue
+        try:
+            value = sidecar.read_text(encoding="utf-8-sig")
+        except (OSError, UnicodeError):
+            continue
+        if not normalize_lyrics(value):
+            continue
+        if suffix == ".lrc":
+            return response("ok", plain_from_synced(value), value, "sidecar")
+        return response("ok", value, source="sidecar")
+
+    ffprobe = os.environ.get("MEDIA_CONTROLS_FFPROBE", "/usr/bin/ffprobe")
+    try:
+        completed = subprocess.run(
+            [
+                ffprobe, "-v", "error", "-show_entries", "format_tags:stream_tags",
+                "-of", "json", str(track),
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if completed.returncode != 0:
+        return None
+    try:
+        payload = json.loads(completed.stdout or "{}")
+    except json.JSONDecodeError:
+        return None
+    plain, synced = lyrics_from_probe(payload)
+    return response("ok", plain, synced, "embedded") if plain or synced else None
+
+
+def normalized_name(value: str) -> str:
+    folded = unicodedata.normalize("NFKD", value or "").encode("ascii", "ignore").decode()
+    return " ".join(re.findall(r"[a-z0-9]+", folded.lower()))
+
+
+def similarity(left: str, right: str) -> float:
+    return difflib.SequenceMatcher(None, normalized_name(left), normalized_name(right)).ratio()
+
+
+def best_search_result(results: list, title: str, artist: str, album: str, duration: int) -> dict | None:
+    candidates: list[tuple[float, dict]] = []
+    for item in results:
+        if not isinstance(item, dict):
+            continue
+        title_score = similarity(title, str(item.get("trackName", "")))
+        artist_score = similarity(artist, str(item.get("artistName", "")))
+        if title_score < 0.72 or (artist and artist_score < 0.5):
+            continue
+        score = title_score * 5 + artist_score * 3
+        if album:
+            score += similarity(album, str(item.get("albumName", ""))) * 1.5
+        result_duration = int(round(float(item.get("duration") or 0)))
+        if duration and result_duration:
+            delta = abs(duration - result_duration)
+            score += 3 if delta <= 2 else max(0, 2 - delta / 15)
+        if item.get("syncedLyrics"):
+            score += 0.25
+        candidates.append((score, item))
+    return max(candidates, key=lambda pair: pair[0])[1] if candidates else None
+
+
+def result_response(item: dict, source: str = "lrclib") -> dict | None:
+    if not isinstance(item, dict):
+        return None
+    if item.get("instrumental") is True:
+        return response("ok", "♪  Instrumental", source=source)
+    plain = normalize_lyrics(item.get("plainLyrics"))
+    synced = normalize_lyrics(item.get("syncedLyrics"))
+    if not plain and synced:
+        plain = plain_from_synced(synced)
+    return response("ok", plain, synced, source) if plain or synced else None
+
+
+def request_json(base_url: str, endpoint: str, params: dict[str, object]) -> object:
+    url = f"{base_url.rstrip('/')}/{endpoint}?{urlencode(params)}"
+    request = Request(url, headers={"User-Agent": USER_AGENT, "Accept": "application/json"})
+    with urlopen(request, timeout=15) as reply:
+        return json.loads(reply.read().decode("utf-8"))
+
+
+def cache_file(title: str, artist: str, album: str, duration: int) -> Path:
+    signature = json.dumps(
+        [normalized_name(title), normalized_name(artist), normalized_name(album), duration],
+        ensure_ascii=True,
+        separators=(",", ":"),
+    ).encode()
+    cache_home = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache"))
+    directory = cache_home / "omarchy" / "media-controls" / "lyrics"
+    directory.mkdir(parents=True, exist_ok=True)
+    return directory / f"{hashlib.sha256(signature).hexdigest()}.json"
+
+
+def read_cache(path: Path) -> dict | None:
+    try:
+        cached = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(cached, dict):
+        return None
+    if cached.get("status") == "ok":
+        cached["source"] = "lrclib-cache"
+        return cached
+    fetched_at = float(cached.get("fetchedAt") or 0)
+    return cached if time.time() - fetched_at < NOT_FOUND_TTL else None
+
+
+def write_cache(path: Path, payload: dict) -> None:
+    data = dict(payload)
+    data["fetchedAt"] = int(time.time())
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    try:
+        temporary.write_text(json.dumps(data, ensure_ascii=False) + "\n", encoding="utf-8")
+        os.replace(temporary, path)
+    finally:
+        try:
+            temporary.unlink()
+        except FileNotFoundError:
+            pass
+
+
+def online_lyrics(title: str, artist: str, album: str, duration: int) -> dict:
+    path = cache_file(title, artist, album, duration)
+    cached = read_cache(path)
+    if cached:
+        return cached
+
+    base_url = os.environ.get("MEDIA_CONTROLS_LRCLIB_BASE_URL", "https://lrclib.net/api")
+    try:
+        if title and artist and album and duration:
+            try:
+                exact = request_json(base_url, "get", {
+                    "track_name": title,
+                    "artist_name": artist,
+                    "album_name": album,
+                    "duration": duration,
+                })
+                resolved = result_response(exact)
+                if resolved:
+                    write_cache(path, resolved)
+                    return resolved
+            except HTTPError as error:
+                if error.code != 404:
+                    raise
+
+        results = request_json(base_url, "search", {
+            "track_name": title,
+            "artist_name": artist,
+            **({"album_name": album} if album else {}),
+        })
+        match = best_search_result(results if isinstance(results, list) else [], title, artist, album, duration)
+        resolved = result_response(match) if match else None
+        if resolved:
+            write_cache(path, resolved)
+            return resolved
+        missing = response("not-found", message="No matching lyrics were found.")
+        write_cache(path, missing)
+        return missing
+    except HTTPError as error:
+        if error.code == 429:
+            return response("error", message="LRCLIB rate limit reached. Try again later.")
+        return response("error", message=f"Lyrics service returned HTTP {error.code}.")
+    except (URLError, TimeoutError, json.JSONDecodeError, OSError):
+        return response("error", message="Could not reach the lyrics service.")
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Resolve local-first lyrics for the active track")
+    parser.add_argument("--title", default="")
+    parser.add_argument("--artist", default="")
+    parser.add_argument("--album", default="")
+    parser.add_argument("--duration", type=float, default=0)
+    parser.add_argument("--url", default="")
+    args = parser.parse_args()
+
+    local = local_lyrics(args.url)
+    if local:
+        print(json.dumps(local, ensure_ascii=False))
+        return 0
+
+    if os.environ.get("MEDIA_CONTROLS_ONLINE_LYRICS", "1").lower() in {"0", "false", "off", "no"}:
+        print(json.dumps(response("not-found", message="Online lyrics lookup is disabled.")))
+        return 0
+    if not args.title or not args.artist:
+        print(json.dumps(response("not-found", message="The player did not provide enough metadata for a lyrics search.")))
+        return 0
+
+    print(json.dumps(online_lyrics(
+        args.title.strip(), args.artist.strip(), args.album.strip(), int(round(max(0, args.duration)))
+    ), ensure_ascii=False))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -1,0 +1,124 @@
+#!/bin/bash
+
+set -euo pipefail
+
+ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+
+fail() {
+  echo "FAIL: $*" >&2
+  exit 1
+}
+
+python3 - "$ROOT/scripts/media-cover" "$ROOT/scripts/media-lyrics" <<'PY'
+from pathlib import Path
+import sys
+
+for source in sys.argv[1:]:
+    compile(Path(source).read_text(encoding="utf-8"), source, "exec")
+print("PASS: helper syntax")
+PY
+
+node - "$ROOT/Model.js" "$ROOT/BarWidget.qml" "$ROOT/PlayerWindow.qml" <<'JS'
+const assert = require('node:assert/strict')
+const fs = require('node:fs')
+const model = require(process.argv[2])
+const barSource = fs.readFileSync(process.argv[3], 'utf8')
+const windowSource = fs.readFileSync(process.argv[4], 'utf8')
+
+assert.equal(model.metadataText({ 'xesam:url': 'file:///music/song.flac' }, 'xesam:url'), 'file:///music/song.flac')
+assert.equal(model.metadataText({ 'xesam:artist': ['One', 'Two'] }, 'xesam:artist'), 'One, Two')
+assert.equal(model.durationSeconds(225000000), 225)
+assert.equal(model.durationSeconds(225), 225)
+assert.equal(model.formatDuration(225), '3:45')
+assert.equal(model.formatDuration(3725), '1:02:05')
+assert.equal(model.plainLyricsFromSynced('[ar:Artist]\n[00:01.20]First line\n[00:04.00]Second line'), 'First line\nSecond line')
+assert.deepEqual(model.parseLyricsResponse(JSON.stringify({
+  status: 'ok', syncedLyrics: '[00:01.20]First line', source: 'lrclib'
+})), {
+  status: 'ok', lyrics: 'First line', syncedLyrics: '[00:01.20]First line',
+  source: 'lrclib', message: ''
+})
+assert.equal(model.nowPlayingLabel('Song', 'Artist'), 'Song  ·  Artist')
+assert.equal(model.isVerticalPosition('top'), false)
+assert.equal(model.isVerticalPosition('bottom'), false)
+assert.equal(model.isVerticalPosition('left'), true)
+assert.equal(model.isVerticalPosition('right'), true)
+assert.equal(model.lyricsSourceLabel('embedded'), 'Embedded in audio file')
+
+assert.match(barSource, /action: "previous"/)
+assert.match(barSource, /action: "playPause"/)
+assert.match(barSource, /action: "next"/)
+assert.match(barSource, /horizontalLayout/)
+assert.match(barSource, /verticalLayout/)
+assert.match(barSource, /root\.openDetails\(\)/)
+assert.match(windowSource, /requestLyrics/)
+assert.match(windowSource, /root\.lyricsDisplayText\(\)/)
+assert.match(windowSource, /activePlayer\.position = next/)
+console.log('PASS: media model and UI contract')
+JS
+
+python3 - "$ROOT/scripts/media-cover" "$ROOT/scripts/media-lyrics" <<'PY'
+import importlib.machinery
+import importlib.util
+from pathlib import Path
+import tempfile
+import sys
+
+
+def load(name, path):
+    loader = importlib.machinery.SourceFileLoader(name, path)
+    spec = importlib.util.spec_from_loader(name, loader)
+    module = importlib.util.module_from_spec(spec)
+    loader.exec_module(module)
+    return module
+
+
+cover = load("media_cover", sys.argv[1])
+lyrics = load("media_lyrics", sys.argv[2])
+
+plain, synced = lyrics.lyrics_from_probe({
+    "format": {"tags": {"SYNCEDLYRICS": "[00:01.00]Hello\n[00:03.50]world"}}
+})
+assert plain == "Hello\nworld"
+assert synced.startswith("[00:01.00]")
+
+plain, synced = lyrics.lyrics_from_probe({
+    "format": {"tags": {"LYRICS": "Line one\nLine two"}}
+})
+assert plain == "Line one\nLine two"
+assert synced == ""
+
+best = lyrics.best_search_result([
+    {"trackName": "Different", "artistName": "Someone", "duration": 200},
+    {"trackName": "The Song", "artistName": "The Artist", "albumName": "The Album", "duration": 225,
+     "plainLyrics": "words"},
+], "The Song", "The Artist", "The Album", 225)
+assert best["plainLyrics"] == "words"
+
+with tempfile.TemporaryDirectory() as directory:
+    root = Path(directory)
+    track = root / "song.flac"
+    track.touch()
+    image = root / "Cover.PNG"
+    image.write_bytes(b"image")
+    assert cover.local_path(track.as_uri()) == track
+    assert cover.sidecar_cover(track) == image
+
+print("PASS: local media and lyrics helpers")
+PY
+
+jq -e '
+  .schemaVersion == 1
+  and .id == "ssupt.media-controls"
+  and .version == "0.1.0"
+  and .author == "ssupt"
+  and (.kinds | index("service") != null)
+  and (.kinds | index("bar-widget") != null)
+  and (.kinds | index("panel") != null)
+  and .entryPoints.service == "Service.qml"
+  and .entryPoints.barWidget == "BarWidget.qml"
+  and .entryPoints.panel == "PlayerWindow.qml"
+  and .barWidget.defaultSection == "center"
+  and .omarchy.clonedFrom == "omarchy.media"
+' "$ROOT/manifest.json" >/dev/null || fail "manifest"
+echo "PASS: manifest"

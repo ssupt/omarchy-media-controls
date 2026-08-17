@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "id": "ssupt.media-controls",
+  "name": "Media Controls",
+  "version": "0.1.0",
+  "author": "ssupt",
+  "description": "Adaptive MPRIS playback controls with album artwork and local-first lyrics",
+  "kinds": [
+    "service",
+    "bar-widget",
+    "panel"
+  ],
+  "keepLoaded": true,
+  "entryPoints": {
+    "service": "Service.qml",
+    "barWidget": "BarWidget.qml",
+    "panel": "PlayerWindow.qml"
+  },
+  "barWidget": {
+    "displayName": "Media Controls",
+    "description": "Now-playing artwork, playback controls, and a lyrics window",
+    "category": "Media",
+    "allowMultiple": false,
+    "defaultSection": "center"
+  },
+  "omarchy": {
+    "clonedFrom": "omarchy.media"
+  }
+}

@@ -1,0 +1,110 @@
+#!/usr/bin/python3
+
+import argparse
+import hashlib
+import os
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+from urllib.parse import unquote, urlparse
+
+
+SIDE_CAR_NAMES = (
+    "cover.jpg", "cover.jpeg", "cover.png", "cover.webp",
+    "folder.jpg", "folder.jpeg", "folder.png", "folder.webp",
+    "front.jpg", "front.jpeg", "front.png", "front.webp",
+)
+
+
+def local_path(uri: str) -> Path | None:
+    parsed = urlparse(uri or "")
+    if parsed.scheme != "file":
+        return None
+    return Path(unquote(parsed.path))
+
+
+def sidecar_cover(track: Path) -> Path | None:
+    if not track.is_file():
+        return None
+    try:
+        names = {entry.name.lower(): entry for entry in track.parent.iterdir() if entry.is_file()}
+    except OSError:
+        return None
+    for name in SIDE_CAR_NAMES:
+        if name in names:
+            return names[name]
+    return None
+
+
+def cache_path(track: Path) -> Path:
+    stat = track.stat()
+    fingerprint = f"{track.resolve()}\0{stat.st_size}\0{stat.st_mtime_ns}".encode()
+    key = hashlib.sha256(fingerprint).hexdigest()
+    cache_home = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache"))
+    directory = cache_home / "omarchy" / "media-controls" / "covers"
+    directory.mkdir(parents=True, exist_ok=True)
+    return directory / f"{key}.jpg"
+
+
+def embedded_cover(track: Path) -> Path | None:
+    if not track.is_file():
+        return None
+    destination = cache_path(track)
+    if destination.is_file() and destination.stat().st_size > 0:
+        return destination
+
+    ffmpeg = os.environ.get("MEDIA_CONTROLS_FFMPEG", "/usr/bin/ffmpeg")
+    temporary_name = ""
+    try:
+        with tempfile.NamedTemporaryFile(
+            prefix=".media-cover-", suffix=".jpg", dir=destination.parent, delete=False
+        ) as temporary:
+            temporary_name = temporary.name
+        result = subprocess.run(
+            [
+                ffmpeg, "-v", "error", "-nostdin", "-y", "-i", str(track),
+                "-map", "0:v:0", "-frames:v", "1", "-q:v", "3", temporary_name,
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+            timeout=12,
+        )
+        temporary = Path(temporary_name)
+        if result.returncode != 0 or not temporary.is_file() or temporary.stat().st_size == 0:
+            return None
+        os.replace(temporary, destination)
+        temporary_name = ""
+        return destination
+    except (OSError, subprocess.SubprocessError):
+        return None
+    finally:
+        if temporary_name:
+            try:
+                Path(temporary_name).unlink()
+            except FileNotFoundError:
+                pass
+
+
+def resolve_cover(uri: str) -> Path | None:
+    track = local_path(uri)
+    if not track:
+        return None
+    return sidecar_cover(track) or embedded_cover(track)
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Resolve artwork for a local media track")
+    parser.add_argument("--url", required=True)
+    args = parser.parse_args()
+
+    cover = resolve_cover(args.url)
+    if not cover:
+        return 1
+    print(cover.resolve().as_uri())
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
