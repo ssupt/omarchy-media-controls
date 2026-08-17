@@ -5,6 +5,8 @@ album artwork, track information, and direct previous/play-pause/next controls.
 Click the artwork or track name to open a focused player window with larger art,
 playback progress, and lyrics.
 
+![Media Controls showing a local track with embedded lyrics](preview.png)
+
 It talks directly to MPRIS, so it works with Spotify and any other player that
 exposes the standard Linux media interface—including local-file players.
 The widget adapts automatically to top, bottom, left, and right bars. On a side
@@ -32,6 +34,8 @@ to LRCLIB. To keep lyrics strictly local, launch Omarchy with
 Artwork comes from MPRIS first. For local tracks without exported artwork, the
 plugin looks for `cover`, `folder`, or `front` images beside the file and then
 tries the file's embedded cover.
+
+More plugins by `ssupt`: [omarchy-plugins](https://github.com/ssupt/omarchy-plugins).
 
 ## Install
 
