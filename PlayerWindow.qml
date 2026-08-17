@@ -382,7 +382,7 @@ Item {
 
           TextEdit {
             width: lyricsScroll.availableWidth
-            implicitHeight: Math.max(lyricsScroll.height, contentHeight + Style.space(20))
+            height: Math.max(lyricsScroll.height, contentHeight + Style.space(20))
             text: root.lyricsDisplayText()
             color: root.lyrics !== "" ? root.foreground : root.mutedForeground
             font.family: root.fontFamily
