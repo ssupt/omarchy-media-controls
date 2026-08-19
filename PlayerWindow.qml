@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Controls
 import Quickshell
+import Quickshell.Wayland
 import qs.Ui
 import qs.Commons
 import "Model.js" as Model
@@ -11,7 +12,7 @@ Item {
   property var shell: null
   property var service: null
   property bool closingFromHost: false
-  readonly property bool opened: window.visible
+  property bool opened: false
   readonly property var controlsService: service || (shell ? shell.serviceFor("ssupt.media-controls") : null)
   readonly property var activePlayer: controlsService ? controlsService.activePlayer : null
   readonly property bool hasMedia: controlsService ? controlsService.hasMedia : false
@@ -34,23 +35,25 @@ Item {
 
   function open(_payloadJson) {
     closingFromHost = false
-    window.visible = true
+    opened = true
     Qt.callLater(function() {
-      keyScope.forceActiveFocus()
-      root.updatePosition()
-      if (root.controlsService) root.controlsService.requestLyrics(false)
+      if (root.opened) {
+        keyScope.forceActiveFocus()
+        root.updatePosition()
+        if (root.controlsService) root.controlsService.requestLyrics(false)
+      }
     })
   }
 
   function close() {
     closingFromHost = true
-    window.visible = false
+    opened = false
     closingFromHost = false
   }
 
   function requestClose() {
     if (shell && typeof shell.hide === "function") shell.hide("ssupt.media-controls")
-    else window.visible = false
+    else close()
   }
 
   function runAction(action) {
@@ -82,7 +85,7 @@ Item {
     target: root.controlsService
     function onTrackSignatureChanged() {
       root.updatePosition()
-      if (window.visible) Qt.callLater(function() {
+      if (root.opened) Qt.callLater(function() {
         if (root.controlsService) root.controlsService.requestLyrics(false)
       })
     }
@@ -91,19 +94,20 @@ Item {
   Timer {
     interval: 1000
     repeat: true
-    running: window.visible && root.playing
+    running: root.opened && root.playing
     triggeredOnStart: true
     onTriggered: root.updatePosition()
   }
 
-  FloatingWindow {
+  PanelWindow {
     id: window
-    title: root.hasMedia && root.title ? root.title + " — Media Controls" : "Media Controls"
-    visible: false
-    color: root.background
-    implicitWidth: 760
-    implicitHeight: 680
-    minimumSize: Qt.size(560, 500)
+    visible: root.opened
+    anchors { top: true; bottom: true; left: true; right: true }
+    color: "transparent"
+    exclusionMode: ExclusionMode.Ignore
+    WlrLayershell.namespace: "omarchy-media-controls"
+    WlrLayershell.layer: WlrLayer.Overlay
+    WlrLayershell.keyboardFocus: root.opened ? WlrKeyboardFocus.Exclusive : WlrKeyboardFocus.None
 
     onVisibleChanged: {
       if (visible) {
@@ -114,26 +118,51 @@ Item {
       }
     }
 
-    FocusScope {
-      id: keyScope
+    Rectangle {
       anchors.fill: parent
-      focus: true
+      color: Color.menu.scrim
 
-      Keys.onPressed: function(event) {
-        if (event.key === Qt.Key_Escape) {
-          root.requestClose()
-          event.accepted = true
-        } else if (event.key === Qt.Key_Space) {
-          root.runAction("playPause")
-          event.accepted = true
-        } else if (event.key === Qt.Key_N || event.key === Qt.Key_MediaNext) {
-          root.runAction("next")
-          event.accepted = true
-        } else if (event.key === Qt.Key_P || event.key === Qt.Key_MediaPrevious) {
-          root.runAction("previous")
-          event.accepted = true
-        }
+      MouseArea {
+        anchors.fill: parent
+        onClicked: root.requestClose()
       }
+    }
+
+    BorderSurface {
+      id: card
+      width: Math.min(Style.space(760), window.width - Style.gapsOut * 2)
+      height: Math.min(Style.space(680), window.height - Style.gapsOut * 2)
+      radius: Style.cornerRadius
+      anchors.centerIn: parent
+      color: root.background
+      borderSpec: Border.surfaceSpec("popups", "border", Color.popups.border, Math.max(1, Style.space(2)))
+      clip: true
+
+      MouseArea {
+        anchors.fill: parent
+        onClicked: {}
+      }
+
+      FocusScope {
+        id: keyScope
+        anchors.fill: parent
+        focus: true
+
+        Keys.onPressed: function(event) {
+          if (event.key === Qt.Key_Escape) {
+            root.requestClose()
+            event.accepted = true
+          } else if (event.key === Qt.Key_Space) {
+            root.runAction("playPause")
+            event.accepted = true
+          } else if (event.key === Qt.Key_N || event.key === Qt.Key_MediaNext) {
+            root.runAction("next")
+            event.accepted = true
+          } else if (event.key === Qt.Key_P || event.key === Qt.Key_MediaPrevious) {
+            root.runAction("previous")
+            event.accepted = true
+          }
+        }
 
       Column {
         id: frame
@@ -228,7 +257,6 @@ Item {
 
                 Button {
                   iconText: "󰒮"
-                  tooltipText: "Previous"
                   foreground: root.foreground
                   fontFamily: root.fontFamily
                   enabled: !!root.activePlayer && root.activePlayer.canGoPrevious
@@ -238,7 +266,6 @@ Item {
 
                 Button {
                   iconText: root.playing ? "󰏤" : "󰐊"
-                  tooltipText: root.playing ? "Pause" : "Play"
                   foreground: root.foreground
                   fontFamily: root.fontFamily
                   iconSize: Style.font.iconLarge
@@ -251,7 +278,6 @@ Item {
 
                 Button {
                   iconText: "󰒭"
-                  tooltipText: "Next"
                   foreground: root.foreground
                   fontFamily: root.fontFamily
                   enabled: !!root.activePlayer && root.activePlayer.canGoNext
@@ -364,7 +390,6 @@ Item {
               && root.controlsService && root.controlsService.lyricsState.status !== "ok"
             iconText: "󰑓"
             text: "Retry"
-            tooltipText: "Try the lyrics lookup again"
             foreground: root.foreground
             fontFamily: root.fontFamily
             onClicked: if (root.controlsService) root.controlsService.requestLyrics(true)
