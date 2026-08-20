@@ -18,20 +18,29 @@ for source in sys.argv[1:]:
 print("PASS: helper syntax")
 PY
 
-node - "$ROOT/Model.js" "$ROOT/BarWidget.qml" "$ROOT/PlayerWindow.qml" "$ROOT/Service.qml" <<'JS'
+command -v qmllint >/dev/null 2>&1 || fail "qmllint is required"
+OMARCHY_ROOT=${OMARCHY_PATH:-/usr/share/omarchy}
+[[ -d "$OMARCHY_ROOT/shell" ]] || fail "Omarchy shell imports not found under $OMARCHY_ROOT"
+while IFS= read -r source; do
+  qmllint -I "$OMARCHY_ROOT/shell" "$ROOT/$source" \
+    || fail "QML validation: $source"
+done < <(jq -r '.entryPoints[] | select(type == "string" and endswith(".qml"))' "$ROOT/manifest.json")
+echo "PASS: QML syntax and imports"
+
+node - "$ROOT/Model.js" "$ROOT/BarWidget.qml" "$ROOT/Service.qml" <<'JS'
 const assert = require('node:assert/strict')
 const fs = require('node:fs')
 const model = require(process.argv[2])
 const barSource = fs.readFileSync(process.argv[3], 'utf8')
-const windowSource = fs.readFileSync(process.argv[4], 'utf8')
-const serviceSource = fs.readFileSync(process.argv[5], 'utf8')
+const serviceSource = fs.readFileSync(process.argv[4], 'utf8')
 
 assert.equal(model.metadataText({ 'xesam:url': 'file:///music/song.flac' }, 'xesam:url'), 'file:///music/song.flac')
 assert.equal(model.metadataText({ 'xesam:artist': ['One', 'Two'] }, 'xesam:artist'), 'One, Two')
-assert.equal(model.durationSeconds(225000000), 225)
 assert.equal(model.durationSeconds(225), 225)
+assert.equal(model.durationSeconds(90000), 90000)
 assert.equal(model.formatDuration(225), '3:45')
 assert.equal(model.formatDuration(3725), '1:02:05')
+assert.equal(model.formatDuration(90000), '25:00:00')
 assert.equal(model.plainLyricsFromSynced('[ar:Artist]\n[00:01.20]First line\n[00:04.00]Second line'), 'First line\nSecond line')
 assert.deepEqual(model.parseLyricsResponse(JSON.stringify({
   status: 'ok', syncedLyrics: '[00:01.20]First line', source: 'lrclib'
@@ -46,17 +55,30 @@ assert.equal(model.isVerticalPosition('left'), true)
 assert.equal(model.isVerticalPosition('right'), true)
 assert.equal(model.lyricsSourceLabel('embedded'), 'Embedded in audio file')
 
+const stream = {
+  dbusName: 'org.mpris.MediaPlayer2.stream', uniqueId: 7,
+  trackTitle: 'Live stream', trackArtist: 'Station', trackAlbum: '',
+  lengthSupported: false, length: 10, metadata: { 'xesam:url': 'https://example.test/live' }
+}
+const streamLater = { ...stream, length: 500 }
+assert.equal(model.trackSignature(stream), model.trackSignature(streamLater))
+assert.notEqual(model.trackSignature(stream), model.trackSignature({ ...stream, uniqueId: 8 }))
+
 assert.match(barSource, /action: "previous"/)
 assert.match(barSource, /action: "playPause"/)
 assert.match(barSource, /action: "next"/)
 assert.match(barSource, /horizontalLayout/)
 assert.match(barSource, /verticalLayout/)
 assert.match(barSource, /root\.openDetails\(\)/)
-assert.match(windowSource, /requestLyrics/)
-assert.match(windowSource, /root\.lyricsDisplayText\(\)/)
-assert.match(windowSource, /activePlayer\.position = next/)
+assert.match(barSource, /owner: panel/)
+assert.match(barSource, /anchors\.verticalCenter: parent\.verticalCenter/)
+assert.match(barSource, /status === Image\.Ready/)
+assert.match(barSource, /requestLyrics/)
+assert.match(barSource, /root\.lyricsDisplayText\(\)/)
+assert.match(barSource, /activePlayer\.position = next/)
 assert.match(serviceSource, /Quickshell\.Services\.Mpris/)
 assert.match(serviceSource, /readonly property var players: Mpris\.players/)
+assert.match(serviceSource, /activePlayer\.lengthSupported/)
 assert.match(serviceSource, /target: "media"/)
 console.log('PASS: media model and UI contract')
 JS
@@ -64,6 +86,8 @@ JS
 python3 - "$ROOT/scripts/media-cover" "$ROOT/scripts/media-lyrics" <<'PY'
 import importlib.machinery
 import importlib.util
+import json
+import os
 from pathlib import Path
 import tempfile
 import sys
@@ -98,15 +122,37 @@ best = lyrics.best_search_result([
      "plainLyrics": "words"},
 ], "The Song", "The Artist", "The Album", 225)
 assert best["plainLyrics"] == "words"
+assert lyrics.normalized_name("Beyoncé") == "beyonce"
+assert lyrics.normalized_name("你好") == "你好"
+assert lyrics.normalized_name("Привет") == "привет"
+assert lyrics.similarity("你好", "再见") < 1
+assert lyrics.similarity("Привет", "До свидания") < 1
 
 with tempfile.TemporaryDirectory() as directory:
     root = Path(directory)
+    os.environ["XDG_CACHE_HOME"] = str(root / "cache")
     track = root / "song.flac"
     track.touch()
     image = root / "Cover.PNG"
     image.write_bytes(b"image")
     assert cover.local_path(track.as_uri()) == track
     assert cover.sidecar_cover(track) == image
+
+    first_key = lyrics.cache_file("你好", "歌手", "专辑", 0)
+    second_key = lyrics.cache_file("再见", "艺人", "唱片", 0)
+    assert first_key is not None and second_key is not None
+    assert first_key.name != second_key.name
+
+    malformed = root / "malformed.json"
+    malformed.write_text(json.dumps({"status": "not-found", "fetchedAt": "invalid"}))
+    assert lyrics.read_cache(malformed) is None
+
+    blocked_cache = root / "cache-file"
+    blocked_cache.write_text("not a directory")
+    os.environ["XDG_CACHE_HOME"] = str(blocked_cache)
+    assert lyrics.cache_file("Track", "Artist", "", 0) is None
+    assert cover.cache_path(track) is None
+    lyrics.write_cache(None, {"status": "ok", "lyrics": "words"})
 
 print("PASS: local media and lyrics helpers")
 PY
@@ -118,10 +164,10 @@ jq -e '
   and .author == "ssupt"
   and (.kinds | index("service") != null)
   and (.kinds | index("bar-widget") != null)
-  and (.kinds | index("panel") != null)
+  and (.kinds | index("panel") == null)
   and .entryPoints.service == "Service.qml"
   and .entryPoints.barWidget == "BarWidget.qml"
-  and .entryPoints.panel == "PlayerWindow.qml"
+  and (.entryPoints | has("panel") | not)
   and .barWidget.defaultSection == "center"
   and .omarchy.clonedFrom == "omarchy.media"
 ' "$ROOT/manifest.json" >/dev/null || fail "manifest"

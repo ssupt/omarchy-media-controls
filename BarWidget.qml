@@ -26,7 +26,8 @@ BarWidget {
   readonly property string artUrl: controlsService ? controlsService.artUrl
     : (activePlayer ? String(activePlayer.trackArtUrl || "") : "")
   readonly property real duration: controlsService ? controlsService.duration
-    : (activePlayer ? Model.durationSeconds(activePlayer.length) : 0)
+    : (activePlayer && activePlayer.lengthSupported
+      ? Model.durationSeconds(activePlayer.length) : 0)
   readonly property bool playing: !!(activePlayer && activePlayer.isPlaying)
   readonly property string lyrics: controlsService ? controlsService.lyrics : ""
   readonly property bool lyricsLoading: controlsService ? controlsService.lyricsLoading : false
@@ -52,6 +53,11 @@ BarWidget {
       ? Math.max(0, Number(activePlayer.position || 0)) : 0
   }
 
+  function resetLyricsScroll() {
+    var flick = lyricsScroll ? lyricsScroll.contentItem : null
+    if (flick && flick.contentY !== undefined) flick.contentY = 0
+  }
+
   function seekRatio(ratio) {
     if (!activePlayer || !activePlayer.canSeek || duration <= 0) return
     var next = Math.max(0, Math.min(1, ratio)) * duration
@@ -69,6 +75,7 @@ BarWidget {
   function open() {
     if (hasMedia) {
       hideTrackTooltip()
+      resetLyricsScroll()
       opened = true
       updatePosition()
       if (controlsService) controlsService.requestLyrics(false)
@@ -102,12 +109,14 @@ BarWidget {
     if (opened) hideTrackTooltip()
   }
 
+  onHasMediaChanged: if (!hasMedia && opened) close()
   onActivePlayerChanged: updatePosition()
 
   Connections {
     target: root.controlsService
     function onTrackSignatureChanged() {
       root.updatePosition()
+      root.resetLyricsScroll()
       if (root.opened && root.controlsService) Qt.callLater(function() {
         root.controlsService.requestLyrics(false)
       })
@@ -170,6 +179,7 @@ BarWidget {
 
         Artwork {
           extent: Math.max(Style.space(24), root.barSize - Style.space(9))
+          anchors.verticalCenter: parent.verticalCenter
         }
 
         Column {
@@ -364,6 +374,8 @@ BarWidget {
     id: panel
     anchorItem: root
     bar: root.bar
+    // Keep popup coordination without marking the full two-line widget as
+    // panel-open: the host indicator would cover the artist row.
     owner: panel
     open: root.opened && root.hasMedia
     focusTarget: keyScope
@@ -376,6 +388,7 @@ BarWidget {
 
     onOpenChanged: {
       if (open) {
+        root.resetLyricsScroll()
         root.updatePosition()
         if (root.controlsService) root.controlsService.requestLyrics(false)
       }
@@ -423,17 +436,20 @@ BarWidget {
             clip: true
 
             Image {
+              id: panelArtworkImage
               anchors.fill: parent
               anchors.margins: Style.space(1)
               source: root.artUrl
               asynchronous: true
               fillMode: Image.PreserveAspectCrop
-              visible: source !== ""
+              sourceSize.width: Math.max(1, Math.round(width * Screen.devicePixelRatio))
+              sourceSize.height: Math.max(1, Math.round(height * Screen.devicePixelRatio))
+              visible: status === Image.Ready
             }
 
             Text {
               anchors.centerIn: parent
-              visible: root.artUrl === ""
+              visible: panelArtworkImage.status !== Image.Ready
               text: "󰝚"
               color: root.bar ? root.bar.foreground : Color.foreground
               font.family: root.bar ? root.bar.fontFamily : Style.font.family
@@ -657,17 +673,20 @@ BarWidget {
     clip: true
 
     Image {
+      id: artworkImage
       anchors.fill: parent
       anchors.margins: Style.space(1)
       source: root.artUrl
       asynchronous: true
       fillMode: Image.PreserveAspectCrop
-      visible: source !== ""
+      sourceSize.width: Math.max(1, Math.round(width * Screen.devicePixelRatio))
+      sourceSize.height: Math.max(1, Math.round(height * Screen.devicePixelRatio))
+      visible: status === Image.Ready
     }
 
     Text {
       anchors.centerIn: parent
-      visible: root.artUrl === ""
+      visible: artworkImage.status !== Image.Ready
       text: "󰝚"
       color: root.bar ? root.bar.barForeground : Color.foreground
       font.family: root.bar ? root.bar.fontFamily : Style.font.family

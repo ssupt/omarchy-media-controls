@@ -7,14 +7,12 @@
   "description": "Adaptive MPRIS playback controls with album artwork and local-first lyrics",
   "kinds": [
     "service",
-    "bar-widget",
-    "panel"
+    "bar-widget"
   ],
   "keepLoaded": true,
   "entryPoints": {
     "service": "Service.qml",
-    "barWidget": "BarWidget.qml",
-    "panel": "PlayerWindow.qml"
+    "barWidget": "BarWidget.qml"
   },
   "barWidget": {
     "displayName": "Media Controls",

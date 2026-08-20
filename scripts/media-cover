@@ -37,26 +37,31 @@ def sidecar_cover(track: Path) -> Path | None:
     return None
 
 
-def cache_path(track: Path) -> Path:
-    stat = track.stat()
-    fingerprint = f"{track.resolve()}\0{stat.st_size}\0{stat.st_mtime_ns}".encode()
-    key = hashlib.sha256(fingerprint).hexdigest()
-    cache_home = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache"))
-    directory = cache_home / "omarchy" / "media-controls" / "covers"
-    directory.mkdir(parents=True, exist_ok=True)
-    return directory / f"{key}.jpg"
+def cache_path(track: Path) -> Path | None:
+    try:
+        stat = track.stat()
+        fingerprint = f"{track.resolve()}\0{stat.st_size}\0{stat.st_mtime_ns}".encode()
+        key = hashlib.sha256(fingerprint).hexdigest()
+        cache_home = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache"))
+        directory = cache_home / "omarchy" / "media-controls" / "covers"
+        directory.mkdir(parents=True, exist_ok=True)
+        return directory / f"{key}.jpg"
+    except OSError:
+        return None
 
 
 def embedded_cover(track: Path) -> Path | None:
     if not track.is_file():
         return None
     destination = cache_path(track)
-    if destination.is_file() and destination.stat().st_size > 0:
-        return destination
+    if destination is None:
+        return None
 
     ffmpeg = os.environ.get("MEDIA_CONTROLS_FFMPEG", "/usr/bin/ffmpeg")
     temporary_name = ""
     try:
+        if destination.is_file() and destination.stat().st_size > 0:
+            return destination
         with tempfile.NamedTemporaryFile(
             prefix=".media-cover-", suffix=".jpg", dir=destination.parent, delete=False
         ) as temporary:
@@ -83,7 +88,7 @@ def embedded_cover(track: Path) -> Path | None:
         if temporary_name:
             try:
                 Path(temporary_name).unlink()
-            except FileNotFoundError:
+            except OSError:
                 pass
 
 

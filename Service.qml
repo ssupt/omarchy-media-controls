@@ -18,7 +18,8 @@ Item {
   readonly property string title: activePlayer ? String(activePlayer.trackTitle || "") : ""
   readonly property string artist: activePlayer ? String(activePlayer.trackArtist || "") : ""
   readonly property string album: activePlayer ? String(activePlayer.trackAlbum || "") : ""
-  readonly property real duration: activePlayer ? Model.durationSeconds(activePlayer.length) : 0
+  readonly property real duration: activePlayer && activePlayer.lengthSupported
+    ? Model.durationSeconds(activePlayer.length) : 0
   readonly property var metadata: activePlayer && activePlayer.metadata ? activePlayer.metadata : ({})
   readonly property string trackUrl: Model.metadataText(metadata, "xesam:url")
   readonly property string embeddedLyrics: Model.metadataText(metadata, "xesam:asText")
@@ -264,6 +265,14 @@ Item {
   }
 
   onTrackSignatureChanged: refreshTrack()
+  onPrimaryArtUrlChanged: {
+    if (primaryArtUrl !== "") {
+      coverDelay.stop()
+      if (coverProc.running) coverProc.running = false
+    } else if (hasMedia && trackUrl.indexOf("file:") === 0 && fallbackArtUrl === "") {
+      coverDelay.restart()
+    }
+  }
   Component.onCompleted: refreshTrack()
 
   Timer {

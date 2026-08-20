@@ -12,9 +12,6 @@ function metadataText(metadata, key) {
 function durationSeconds(value) {
   var duration = Number(value || 0)
   if (!isFinite(duration) || duration <= 0) return 0
-  // Quickshell exposes seconds, while raw MPRIS metadata uses microseconds.
-  // Accept either so fixtures and unusual players cannot create week-long UI.
-  if (duration > 86400) duration = duration / 1000000
   return Math.max(0, duration)
 }
 
@@ -91,14 +88,18 @@ function parseLyricsResponse(raw) {
 function trackSignature(player) {
   if (!player) return ""
   var metadata = player.metadata || {}
+  var uniqueId = player.uniqueId === undefined || player.uniqueId === null
+    ? "" : player.uniqueId
+  var duration = player.lengthSupported === false
+    ? "" : durationSeconds(player.length)
   return [
     player.dbusName || player.desktopEntry || player.identity || "",
+    uniqueId,
     player.trackTitle || "",
     player.trackArtist || "",
     player.trackAlbum || "",
-    durationSeconds(player.length),
-    metadataText(metadata, "xesam:url"),
-    player.trackArtUrl || ""
+    duration,
+    metadataText(metadata, "xesam:url")
   ].join("\u001f")
 }
 

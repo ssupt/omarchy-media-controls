@@ -2,7 +2,7 @@
 
 Media Controls turns Omarchy's media widget into a small now-playing rail with
 album artwork, track information, and direct previous/play-pause/next controls.
-Click the artwork or track name to open a focused player window with larger art,
+Click the artwork or track name to open a focused player popup with larger art,
 playback progress, and lyrics.
 
 ![Media Controls showing a local track with embedded lyrics](preview.png)
@@ -52,7 +52,7 @@ media plugin is disabled as part of that replacement.
 - Click the artwork or track information to open the lyrics window.
 - Use the three buttons for previous, play/pause, and next.
 - Scroll over the track information to move through the queue.
-- In the lyrics window, use Space to play/pause, `N` for next, `P` for previous,
+- In the lyrics popup, use Space to play/pause, `N` for next, `P` for previous,
   and Escape to close.
 - Click the progress track to seek when the player supports it.
 
