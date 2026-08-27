@@ -1,17 +1,56 @@
 # Media Controls for Omarchy
 
-Media Controls turns Omarchy's media widget into a small now-playing rail with
-album artwork, track information, and direct previous/play-pause/next controls.
-Click the artwork or track name to open a focused player popup with larger art,
-playback progress, and lyrics.
-
-![Media Controls showing a local track with embedded lyrics](preview.png)
+Media Controls turns Omarchy's media widget into a local archive browser and a
+compact now-playing rail. Its popup follows Coda's Monumental interface
+language: square one-pixel rules, numbered sections, restrained state color,
+and distinct machine/archive typography. When nothing is playing, the widget
+remains visible as **ARCHIVE** so the local collection is always one click away.
 
 It talks directly to MPRIS, so it works with Spotify and any other player that
 exposes the standard Linux media interface—including local-file players.
-The widget adapts automatically to top, bottom, left, and right bars. On a side
-bar the title rotates into the rail while the artwork and controls stack
-vertically.
+The bar itself stays native to Omarchy and adapts automatically to top, bottom,
+left, and right positions. On a side bar the title rotates into the rail while
+the artwork and controls stack vertically.
+
+## Music browser
+
+The browser watches the Music folder for live changes, keeps folders ahead of
+supported audio files, and sorts names naturally. It never creates a missing
+Music folder. The root is resolved from `MEDIA_CONTROLS_MUSIC_DIR`, then
+`xdg-user-dir MUSIC`, then `$HOME/Music`.
+
+Coda is optional. The default `auto` mode uses its public CLI only when Coda is
+already the connected MPRIS player; it never starts Coda just because the
+binary is installed. `prefer` allows a browser selection to start Coda, while
+`off` never invokes it. The popup can show Coda's public status data—queue
+position, direct-output state, and signal format—when Coda is active. No Coda
+database or private files are read.
+
+When a selection is not routed to Coda, the plugin tries one reusable,
+audio-only mpv session and then `xdg-open`. Later selections replace that mpv
+session's playlist through a private Unix socket instead of starting another
+player process; the session remains idle and reusable between selections. Those
+fallbacks cannot guarantee MPRIS controls, and the browser reports that
+explicitly. Once a player appears, transport control stays on the standard
+MPRIS interface in every mode.
+
+## Optional Coda settings
+
+Settings live beside the widget entry in `~/.config/omarchy/shell.json`:
+
+```json
+{
+  "id": "ssupt.media-controls",
+  "codaIntegration": "auto",
+  "showCodaDetails": true,
+  "showWhenIdle": true
+}
+```
+
+`codaIntegration` accepts `off`, `auto`, or `prefer`. `showCodaDetails` controls
+the Coda-only diagnostic strip in the Transmission view whenever integration is
+enabled. Set `showWhenIdle` to `false` if the ARCHIVE entry should disappear
+when no player is available.
 
 ## Lyrics
 
@@ -49,11 +88,14 @@ media plugin is disabled as part of that replacement.
 
 ## Controls
 
-- Click the artwork or track information to open the lyrics window.
+- Click the artwork or track information to open the Transmission window.
+- Click **ARCHIVE**, or the Archive button in now-playing, to browse music.
+- Use Up/Down and Home/End to select; Enter opens or plays; Ctrl+Enter plays a
+  selected folder recursively; Backspace goes up; Escape goes up or exits.
 - Use the three buttons for previous, play/pause, and next.
 - Scroll over the track information to move through the queue.
-- In the lyrics popup, use Space to play/pause, `N` for next, `P` for previous,
-  and Escape to close.
+- In the Transmission popup, use Space to play/pause, `N` for next, `P` for
+  previous, `B` for the archive, and Escape to close.
 - Click the progress track to seek when the player supports it.
 
 ## Requirements
@@ -62,8 +104,11 @@ media plugin is disabled as part of that replacement.
 - Python 3
 - `ffmpeg`/`ffprobe` for local embedded lyrics and artwork
 - Network access for the optional LRCLIB fallback
+- Optional: Coda for deterministic queueing, public playback diagnostics, and
+  MPRIS handoff; or mpv as the first playback fallback
 
-These runtime commands are included in a standard Omarchy installation.
+Python and FFmpeg are included in a standard Omarchy installation; Coda and
+mpv remain optional.
 
 ## Updating
 
@@ -83,9 +128,10 @@ Removing the plugin restores Omarchy's built-in media widget.
 
 ```bash
 ./test/all
-omarchy-plugin-validate .
+omarchy plugin validate .
 ```
 
 ## License
 
-MIT
+The plugin code is MIT licensed. Bundled DINish and Hakkou Mincho fonts are
+distributed under the SIL Open Font License 1.1 in `assets/fonts/OFL.txt`.

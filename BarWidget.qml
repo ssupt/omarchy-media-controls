@@ -33,11 +33,17 @@ BarWidget {
   readonly property bool lyricsLoading: controlsService ? controlsService.lyricsLoading : false
   readonly property string lyricsSource: controlsService ? controlsService.lyricsSource : ""
   readonly property string lyricsMessage: controlsService ? controlsService.lyricsMessage : ""
-  property real displayedPosition: 0
-  property bool opened: false
-
+  readonly property string integrationMode: Model.codaIntegrationMode(
+    root.setting("codaIntegration", "auto"))
+  readonly property bool showCodaDetails: Model.booleanValue(
+    root.setting("showCodaDetails", true), true)
+  readonly property bool showWhenIdle: Model.booleanValue(
+    root.setting("showWhenIdle", true), true)
   readonly property bool vertical: bar ? Model.isVerticalPosition(bar.position) : false
   readonly property string label: Model.nowPlayingLabel(title, artist)
+  property alias browsing: playerWindow.browserVisible
+  property real displayedPosition: 0
+  property bool opened: false
   property real maxHorizontalLabelWidth: Style.space(180)
   property real maxVerticalLabelLength: Style.space(125)
 
@@ -54,8 +60,7 @@ BarWidget {
   }
 
   function resetLyricsScroll() {
-    var flick = lyricsScroll ? lyricsScroll.contentItem : null
-    if (flick && flick.contentY !== undefined) flick.contentY = 0
+    playerWindow.resetLyricsScroll()
   }
 
   function seekRatio(ratio) {
@@ -73,13 +78,27 @@ BarWidget {
   }
 
   function open() {
-    if (hasMedia) {
-      hideTrackTooltip()
+    hideTrackTooltip()
+    opened = true
+    if (!browsing && hasMedia) {
       resetLyricsScroll()
-      opened = true
       updatePosition()
       if (controlsService) controlsService.requestLyrics(false)
     }
+  }
+
+  function openBrowser() {
+    browsing = true
+    open()
+  }
+
+  function openNowPlaying() {
+    if (!hasMedia) {
+      openBrowser()
+      return
+    }
+    browsing = false
+    open()
   }
 
   function close() {
@@ -87,29 +106,32 @@ BarWidget {
     hideTrackTooltip()
   }
 
-  function toggle() {
-    if (opened) close()
-    else open()
-  }
-
   function openDetails() {
     hideTrackTooltip()
-    toggle()
+    if (!hasMedia) {
+      if (opened && browsing) close()
+      else openBrowser()
+      return
+    }
+    if (opened && browsing) openNowPlaying()
+    else if (opened) close()
+    else openNowPlaying()
   }
 
   function showTrackTooltip() {
-    if (bar && !opened) bar.showTooltip(root, label)
+    if (bar && !opened) bar.showTooltip(root, hasMedia ? label : "Browse music archive")
   }
 
   function hideTrackTooltip() {
     if (bar) bar.hideTooltip(root)
   }
 
-  onOpenedChanged: {
-    if (opened) hideTrackTooltip()
+  onOpenedChanged: if (opened) hideTrackTooltip()
+  onHasMediaChanged: if (!hasMedia && opened) {
+    if (showWhenIdle) browsing = true
+    else close()
   }
-
-  onHasMediaChanged: if (!hasMedia && opened) close()
+  onShowWhenIdleChanged: if (!showWhenIdle && !hasMedia && opened) close()
   onActivePlayerChanged: updatePosition()
 
   Connections {
@@ -117,7 +139,7 @@ BarWidget {
     function onTrackSignatureChanged() {
       root.updatePosition()
       root.resetLyricsScroll()
-      if (root.opened && root.controlsService) Qt.callLater(function() {
+      if (root.opened && !root.browsing && root.controlsService) Qt.callLater(function() {
         root.controlsService.requestLyrics(false)
       })
     }
@@ -126,18 +148,22 @@ BarWidget {
   Timer {
     interval: 1000
     repeat: true
-    running: root.opened && root.playing
+    running: root.opened && !root.browsing && root.playing
     triggeredOnStart: true
     onTriggered: root.updatePosition()
   }
 
-  visible: hasMedia
-  implicitWidth: hasMedia ? (vertical ? barSize : horizontalLayout.implicitWidth) : 0
-  implicitHeight: hasMedia ? (vertical ? verticalLayout.implicitHeight : barSize) : 0
+  visible: hasMedia || showWhenIdle
+  implicitWidth: visible ? (vertical ? barSize : horizontalLayout.implicitWidth) : 0
+  implicitHeight: visible ? (vertical ? verticalLayout.implicitHeight : barSize) : 0
+
+  MonumentStyle {
+    id: monument
+  }
 
   onBarChanged: {
     if (horizontalIdentity) horizontalIdentity.syncClickRegistration()
-    if (verticalArtworkContainer) verticalArtworkContainer.syncClickRegistration()
+    if (verticalIdentity) verticalIdentity.syncClickRegistration()
     if (verticalLabelContainer) verticalLabelContainer.syncClickRegistration()
   }
 
@@ -163,14 +189,17 @@ BarWidget {
       }
 
       function syncClickRegistration() {
-        if (registeredBar && registeredBar.unregisterClickTarget) registeredBar.unregisterClickTarget(horizontalIdentity)
+        if (registeredBar && registeredBar.unregisterClickTarget)
+          registeredBar.unregisterClickTarget(horizontalIdentity)
         registeredBar = root.bar
-        if (registeredBar && registeredBar.registerClickTarget) registeredBar.registerClickTarget(horizontalIdentity)
+        if (registeredBar && registeredBar.registerClickTarget)
+          registeredBar.registerClickTarget(horizontalIdentity)
       }
 
       onVisibleChanged: syncClickRegistration()
       Component.onCompleted: syncClickRegistration()
-      Component.onDestruction: if (registeredBar && registeredBar.unregisterClickTarget) registeredBar.unregisterClickTarget(horizontalIdentity)
+      Component.onDestruction: if (registeredBar && registeredBar.unregisterClickTarget)
+        registeredBar.unregisterClickTarget(horizontalIdentity)
 
       Row {
         id: horizontalIdentityRow
@@ -178,13 +207,22 @@ BarWidget {
         spacing: Style.space(7)
 
         Artwork {
+          visible: root.hasMedia
+          extent: Math.max(Style.space(24), root.barSize - Style.space(9))
+          anchors.verticalCenter: parent.verticalCenter
+        }
+
+        BrowserIcon {
+          visible: !root.hasMedia
           extent: Math.max(Style.space(24), root.barSize - Style.space(9))
           anchors.verticalCenter: parent.verticalCenter
         }
 
         Column {
+          visible: root.hasMedia
           width: Math.min(root.maxHorizontalLabelWidth,
-            Math.max(Style.space(72), Math.max(horizontalTitle.implicitWidth, horizontalArtist.implicitWidth)))
+            Math.max(Style.space(72), Math.max(horizontalTitle.implicitWidth,
+              horizontalArtist.implicitWidth)))
           spacing: Style.space(1)
           anchors.verticalCenter: parent.verticalCenter
 
@@ -209,6 +247,17 @@ BarWidget {
             elide: Text.ElideRight
           }
         }
+
+        Text {
+          visible: !root.hasMedia
+          anchors.verticalCenter: parent.verticalCenter
+          text: "ARCHIVE"
+          color: root.bar ? root.bar.barForeground : Color.foreground
+          font.family: root.bar ? root.bar.fontFamily : Style.font.family
+          font.pixelSize: Style.font.caption
+          font.bold: true
+          font.letterSpacing: 0.7
+        }
       }
 
       MouseArea {
@@ -217,6 +266,7 @@ BarWidget {
         cursorShape: Qt.PointingHandCursor
         onClicked: root.openDetails()
         onWheel: function(wheel) {
+          if (!root.hasMedia) return
           if (wheel.angleDelta.y > 0) root.runAction("previous")
           else if (wheel.angleDelta.y < 0) root.runAction("next")
         }
@@ -225,7 +275,16 @@ BarWidget {
       }
     }
 
+    Rectangle {
+      visible: root.hasMedia
+      width: Style.space(3)
+      height: Style.space(10)
+      anchors.verticalCenter: parent.verticalCenter
+      color: root.playing ? monument.authorityText : monument.warning
+    }
+
     Row {
+      visible: root.hasMedia
       spacing: Style.space(1)
       anchors.verticalCenter: parent.verticalCenter
 
@@ -255,7 +314,7 @@ BarWidget {
     spacing: Style.space(4)
 
     Item {
-      id: verticalArtworkContainer
+      id: verticalIdentity
       width: parent.width
       height: Math.max(Style.space(24), root.barSize - Style.space(8))
 
@@ -269,16 +328,26 @@ BarWidget {
       }
 
       function syncClickRegistration() {
-        if (registeredBar && registeredBar.unregisterClickTarget) registeredBar.unregisterClickTarget(verticalArtworkContainer)
+        if (registeredBar && registeredBar.unregisterClickTarget)
+          registeredBar.unregisterClickTarget(verticalIdentity)
         registeredBar = root.bar
-        if (registeredBar && registeredBar.registerClickTarget) registeredBar.registerClickTarget(verticalArtworkContainer)
+        if (registeredBar && registeredBar.registerClickTarget)
+          registeredBar.registerClickTarget(verticalIdentity)
       }
 
       onVisibleChanged: syncClickRegistration()
       Component.onCompleted: syncClickRegistration()
-      Component.onDestruction: if (registeredBar && registeredBar.unregisterClickTarget) registeredBar.unregisterClickTarget(verticalArtworkContainer)
+      Component.onDestruction: if (registeredBar && registeredBar.unregisterClickTarget)
+        registeredBar.unregisterClickTarget(verticalIdentity)
 
       Artwork {
+        visible: root.hasMedia
+        extent: parent.height
+        anchors.centerIn: parent
+      }
+
+      BrowserIcon {
+        visible: !root.hasMedia
         extent: parent.height
         anchors.centerIn: parent
       }
@@ -295,8 +364,10 @@ BarWidget {
 
     Item {
       id: verticalLabelContainer
+      visible: root.hasMedia
       width: parent.width
-      height: Math.min(root.maxVerticalLabelLength, Math.max(Style.space(72), verticalLabel.implicitWidth))
+      height: Math.min(root.maxVerticalLabelLength,
+        Math.max(Style.space(72), verticalLabel.implicitWidth))
       clip: true
 
       property bool pressable: true
@@ -309,14 +380,17 @@ BarWidget {
       }
 
       function syncClickRegistration() {
-        if (registeredBar && registeredBar.unregisterClickTarget) registeredBar.unregisterClickTarget(verticalLabelContainer)
+        if (registeredBar && registeredBar.unregisterClickTarget)
+          registeredBar.unregisterClickTarget(verticalLabelContainer)
         registeredBar = root.bar
-        if (registeredBar && registeredBar.registerClickTarget) registeredBar.registerClickTarget(verticalLabelContainer)
+        if (registeredBar && registeredBar.registerClickTarget)
+          registeredBar.registerClickTarget(verticalLabelContainer)
       }
 
       onVisibleChanged: syncClickRegistration()
       Component.onCompleted: syncClickRegistration()
-      Component.onDestruction: if (registeredBar && registeredBar.unregisterClickTarget) registeredBar.unregisterClickTarget(verticalLabelContainer)
+      Component.onDestruction: if (registeredBar && registeredBar.unregisterClickTarget)
+        registeredBar.unregisterClickTarget(verticalLabelContainer)
 
       Text {
         id: verticalLabel
@@ -348,6 +422,7 @@ BarWidget {
     }
 
     Column {
+      visible: root.hasMedia
       anchors.horizontalCenter: parent.horizontalCenter
       spacing: Style.space(1)
 
@@ -370,306 +445,28 @@ BarWidget {
     }
   }
 
-  KeyboardPanel {
-    id: panel
+  PlayerWindow {
+    id: playerWindow
     anchorItem: root
     bar: root.bar
-    // Keep popup coordination without marking the full two-line widget as
-    // panel-open: the host indicator would cover the artist row.
-    owner: panel
-    open: root.opened && root.hasMedia
-    focusTarget: keyScope
-    contentWidth: panel.fittedContentWidth(Style.space(460))
-    contentHeight: panel.fittedContentHeight(frame.implicitHeight, Style.space(560))
-
-    function close() {
-      root.close()
-    }
-
-    onOpenChanged: {
-      if (open) {
-        root.resetLyricsScroll()
-        root.updatePosition()
-        if (root.controlsService) root.controlsService.requestLyrics(false)
-      }
-    }
-
-    FocusScope {
-      id: keyScope
-      anchors.fill: parent
-      focus: true
-
-      Keys.onPressed: function(event) {
-        if (event.key === Qt.Key_Escape) {
-          root.close()
-          event.accepted = true
-        } else if (event.key === Qt.Key_Space) {
-          root.runAction("playPause")
-          event.accepted = true
-        } else if (event.key === Qt.Key_N || event.key === Qt.Key_MediaNext) {
-          root.runAction("next")
-          event.accepted = true
-        } else if (event.key === Qt.Key_P || event.key === Qt.Key_MediaPrevious) {
-          root.runAction("previous")
-          event.accepted = true
-        }
-      }
-
-      Column {
-        id: frame
-        anchors.left: parent.left
-        anchors.right: parent.right
-        anchors.top: parent.top
-        spacing: Style.space(14)
-
-        Row {
-          width: parent.width
-          spacing: Style.space(16)
-
-          BorderSurface {
-            id: panelArtwork
-            width: Style.space(100)
-            height: Style.space(100)
-            radius: Style.cornerRadius
-            color: Style.normalFillFor(root.bar ? root.bar.foreground : Color.foreground, Color.accent)
-            borderSpec: Border.controlSpec("normal", root.bar ? root.bar.foreground : Color.foreground, Color.accent)
-            clip: true
-
-            Image {
-              id: panelArtworkImage
-              anchors.fill: parent
-              anchors.margins: Style.space(1)
-              source: root.artUrl
-              asynchronous: true
-              fillMode: Image.PreserveAspectCrop
-              sourceSize.width: Math.max(1, Math.round(width * Screen.devicePixelRatio))
-              sourceSize.height: Math.max(1, Math.round(height * Screen.devicePixelRatio))
-              visible: status === Image.Ready
-            }
-
-            Text {
-              anchors.centerIn: parent
-              visible: panelArtworkImage.status !== Image.Ready
-              text: "󰝚"
-              color: root.bar ? root.bar.foreground : Color.foreground
-              font.family: root.bar ? root.bar.fontFamily : Style.font.family
-              font.pixelSize: Style.space(40)
-            }
-          }
-
-          Column {
-            width: parent.width - panelArtwork.width - parent.spacing
-            spacing: Style.space(6)
-
-            Text {
-              width: parent.width
-              text: root.title || "Nothing playing"
-              color: root.bar ? root.bar.foreground : Color.foreground
-              font.family: root.bar ? root.bar.fontFamily : Style.font.family
-              font.pixelSize: Style.font.subtitle
-              font.bold: true
-              elide: Text.ElideRight
-            }
-
-            Text {
-              width: parent.width
-              text: root.artist || "Unknown artist"
-              color: Qt.darker(root.bar ? root.bar.foreground : Color.foreground, 1.35)
-              font.family: root.bar ? root.bar.fontFamily : Style.font.family
-              font.pixelSize: Style.font.bodySmall
-              elide: Text.ElideRight
-            }
-
-            Text {
-              width: parent.width
-              text: root.album
-              visible: text !== ""
-              color: Qt.darker(root.bar ? root.bar.foreground : Color.foreground, 1.65)
-              font.family: root.bar ? root.bar.fontFamily : Style.font.family
-              font.pixelSize: Style.font.caption
-              elide: Text.ElideRight
-            }
-
-            Row {
-              spacing: Style.space(6)
-
-              Button {
-                iconText: "󰒮"
-                foreground: root.bar ? root.bar.foreground : Color.foreground
-                fontFamily: root.bar ? root.bar.fontFamily : Style.font.family
-                enabled: !!root.activePlayer && root.activePlayer.canGoPrevious
-                opacity: enabled ? 1 : 0.38
-                onClicked: root.runAction("previous")
-              }
-
-              Button {
-                iconText: root.playing ? "󰏤" : "󰐊"
-                foreground: root.bar ? root.bar.foreground : Color.foreground
-                fontFamily: root.bar ? root.bar.fontFamily : Style.font.family
-                iconSize: Style.font.iconLarge
-                horizontalPadding: Style.space(16)
-                enabled: !!root.activePlayer && (root.activePlayer.canTogglePlaying
-                  || root.activePlayer.canPlay || root.activePlayer.canPause)
-                opacity: enabled ? 1 : 0.38
-                onClicked: root.runAction("playPause")
-              }
-
-              Button {
-                iconText: "󰒭"
-                foreground: root.bar ? root.bar.foreground : Color.foreground
-                fontFamily: root.bar ? root.bar.fontFamily : Style.font.family
-                enabled: !!root.activePlayer && root.activePlayer.canGoNext
-                opacity: enabled ? 1 : 0.38
-                onClicked: root.runAction("next")
-              }
-            }
-          }
-        }
-
-        Column {
-          width: parent.width
-          spacing: Style.space(4)
-          visible: root.duration > 0
-
-          Rectangle {
-            width: parent.width
-            height: Style.space(4)
-            radius: height / 2
-            color: Util.alpha(root.bar ? root.bar.foreground : Color.foreground, 0.18)
-
-            Rectangle {
-              width: parent.width * Math.max(0, Math.min(1,
-                root.duration > 0 ? root.displayedPosition / root.duration : 0))
-              height: parent.height
-              radius: height / 2
-              color: Color.accent
-            }
-
-            MouseArea {
-              anchors.fill: parent
-              enabled: !!root.activePlayer && root.activePlayer.canSeek
-              cursorShape: enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
-              onClicked: function(mouse) { root.seekRatio(mouse.x / width) }
-            }
-          }
-
-          Row {
-            width: parent.width
-
-            Text {
-              id: elapsedLabel
-              text: Model.formatDuration(root.displayedPosition)
-              color: Qt.darker(root.bar ? root.bar.foreground : Color.foreground, 1.4)
-              font.family: root.bar ? root.bar.fontFamily : Style.font.family
-              font.pixelSize: Style.font.caption
-            }
-
-            Item { width: Math.max(0, parent.width - elapsedLabel.width - durationLabel.width); height: 1 }
-
-            Text {
-              id: durationLabel
-              text: Model.formatDuration(root.duration)
-              color: Qt.darker(root.bar ? root.bar.foreground : Color.foreground, 1.4)
-              font.family: root.bar ? root.bar.fontFamily : Style.font.family
-              font.pixelSize: Style.font.caption
-            }
-          }
-        }
-
-        PanelSeparator {
-          foreground: root.bar ? root.bar.foreground : Color.foreground
-        }
-
-        Row {
-          width: parent.width
-          spacing: Style.space(8)
-
-          PanelSectionHeader {
-            id: lyricsTitle
-            text: "LYRICS"
-            foreground: root.bar ? root.bar.foreground : Color.foreground
-            fontFamily: root.bar ? root.bar.fontFamily : Style.font.family
-            anchors.verticalCenter: parent.verticalCenter
-          }
-
-          BorderSurface {
-            id: sourceBadge
-            visible: root.lyricsSource !== ""
-            implicitWidth: sourceLabel.implicitWidth + Style.space(12)
-            implicitHeight: sourceLabel.implicitHeight + Style.space(4)
-            radius: height / 2
-            color: Util.alpha(root.bar ? root.bar.foreground : Color.foreground, 0.08)
-            borderSpec: Border.none()
-            anchors.verticalCenter: parent.verticalCenter
-
-            Text {
-              id: sourceLabel
-              anchors.centerIn: parent
-              text: root.lyricsSource
-              color: Qt.darker(root.bar ? root.bar.foreground : Color.foreground, 1.4)
-              font.family: root.bar ? root.bar.fontFamily : Style.font.family
-              font.pixelSize: Style.font.caption
-            }
-          }
-
-          Item {
-            width: Math.max(0, parent.width - lyricsTitle.width - sourceBadge.width
-              - retryButton.width - parent.spacing * 2)
-            height: 1
-          }
-
-          Button {
-            id: retryButton
-            visible: !root.lyricsLoading && root.hasMedia
-              && root.controlsService && root.controlsService.lyricsState.status !== "ok"
-            iconText: "󰑓"
-            text: "Retry"
-            foreground: root.bar ? root.bar.foreground : Color.foreground
-            fontFamily: root.bar ? root.bar.fontFamily : Style.font.family
-            onClicked: if (root.controlsService) root.controlsService.requestLyrics(true)
-          }
-        }
-
-        ScrollView {
-          id: lyricsScroll
-          width: parent.width
-          height: Style.space(260)
-          clip: true
-          ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
-          ScrollBar.vertical.policy: ScrollBar.AsNeeded
-
-          TextEdit {
-            width: lyricsScroll.availableWidth
-            height: Math.max(lyricsScroll.height, contentHeight + Style.space(20))
-            text: root.lyricsDisplayText()
-            color: root.lyrics !== ""
-              ? (root.bar ? root.bar.foreground : Color.foreground)
-              : Qt.darker(root.bar ? root.bar.foreground : Color.foreground, 1.4)
-            font.family: root.bar ? root.bar.fontFamily : Style.font.family
-            font.pixelSize: Style.font.body
-            wrapMode: TextEdit.Wrap
-            textFormat: TextEdit.PlainText
-            readOnly: true
-            selectByMouse: true
-            selectionColor: Color.accent
-            selectedTextColor: Color.background
-            leftPadding: Style.space(4)
-            rightPadding: Style.space(12)
-            topPadding: Style.space(4)
-            bottomPadding: Style.space(12)
-          }
-        }
-      }
-    }
+    controller: root
+    controlsService: root.controlsService
+    integrationMode: root.integrationMode
+    showCodaDetails: root.showCodaDetails
+    requestedOpen: root.opened
+    onCloseRequested: root.close()
+    onBrowserRequested: root.openBrowser()
+    onNowPlayingRequested: root.browsing = false
   }
 
   component Artwork: BorderSurface {
     required property real extent
     width: extent
     height: extent
-    radius: Style.spacing.labelGap
+    radius: 0
     color: Style.normalFillFor(root.bar ? root.bar.foreground : Color.foreground, Color.accent)
-    borderSpec: Border.controlSpec("normal", root.bar ? root.bar.foreground : Color.foreground, Color.accent)
+    borderSpec: Border.controlSpec("normal",
+      root.bar ? root.bar.foreground : Color.foreground, Color.accent)
     clip: true
 
     Image {
@@ -688,6 +485,24 @@ BarWidget {
       anchors.centerIn: parent
       visible: artworkImage.status !== Image.Ready
       text: "󰝚"
+      color: root.bar ? root.bar.barForeground : Color.foreground
+      font.family: root.bar ? root.bar.fontFamily : Style.font.family
+      font.pixelSize: Style.font.title
+    }
+  }
+
+  component BrowserIcon: BorderSurface {
+    required property real extent
+    width: extent
+    height: extent
+    radius: 0
+    color: Style.normalFillFor(root.bar ? root.bar.foreground : Color.foreground, Color.accent)
+    borderSpec: Border.controlSpec("normal",
+      root.bar ? root.bar.foreground : Color.foreground, Color.accent)
+
+    Text {
+      anchors.centerIn: parent
+      text: "□"
       color: root.bar ? root.bar.barForeground : Color.foreground
       font.family: root.bar ? root.bar.fontFamily : Style.font.family
       font.pixelSize: Style.font.title

@@ -38,30 +38,224 @@ Item {
   readonly property string lyricsSource: Model.lyricsSourceLabel(lyricsState.source)
   readonly property string lyricsMessage: String(lyricsState.message || "")
 
+  property string musicRoot: ""
+  property string musicRootMessage: "Resolving the Music folder…"
+  property bool codaInstalled: false
+  readonly property bool codaConnected: codaPlayer() !== null
+  readonly property bool activeIsCoda: isCodaPlayer(activePlayer)
+  property var codaStatus: ({})
+  property string codaStatusState: "idle"
+  property string codaStatusMessage: ""
+  property bool codaStatusHandled: false
+  property bool codaShowHandled: false
+  property string launchState: "idle"
+  property string launchBackend: ""
+  property string launchMessage: ""
+  property string launchTarget: ""
+  property string launchKind: ""
+  property string launchCodaMode: "auto"
+  property string pausedPlayerKey: ""
+  property bool pausedPlayerWasPlaying: false
+  property string codaSignatureBeforeLaunch: ""
+  property bool validateHandled: false
+  property bool launchHandled: false
+
+  signal handoffSucceeded()
+  signal launchResultChanged()
+
   function pluginScript(name) {
     var url = String(Qt.resolvedUrl("scripts/" + name))
     return decodeURIComponent(url.replace(/^file:\/\//, ""))
   }
 
-  function isProxyPlayer(player) {
+  function resolveMusicRoot() {
+    musicRoot = ""
+    musicRootMessage = "Resolving the Music folder…"
+    rootProc.command = [pluginScript("media-launch"), "--resolve-root"]
+    rootProc.running = true
+  }
+
+  function isCodaPlayer(player) {
     if (!player) return false
-    var dbusName = String(player.dbusName || "").toLowerCase()
-    var desktopEntry = String(player.desktopEntry || "").toLowerCase()
-    return dbusName.indexOf("playerctld") !== -1 || desktopEntry === "playerctld"
+    var key = playerKey(player).toLowerCase()
+    return key === "org.mpris.mediaplayer2.coda"
+      || key.indexOf("org.mpris.mediaplayer2.coda.") === 0
+      || String(player.desktopEntry || "").toLowerCase() === "io.github.ssupt.coda"
+  }
+
+  function codaPlayer() {
+    for (var i = 0; i < players.length; i++) {
+      if (isCodaPlayer(players[i])) return players[i]
+    }
+    return null
+  }
+
+  function pauseForHandoff() {
+    var player = activePlayer
+    pausedPlayerKey = ""
+    pausedPlayerWasPlaying = false
+    if (!player || !player.isPlaying) return
+    pausedPlayerKey = playerKey(player)
+    pausedPlayerWasPlaying = true
+    if (player.canPause) player.pause()
+    else if (player.canTogglePlaying) player.togglePlaying()
+  }
+
+  function resumePausedPlayer() {
+    if (!pausedPlayerWasPlaying || pausedPlayerKey === "") return
+    var player = playerForKey(pausedPlayerKey)
+    if (player) {
+      if (player.canPlay) player.play()
+      else if (player.canTogglePlaying && !player.isPlaying) player.togglePlaying()
+      preferredPlayerKey = playerKey(player)
+    }
+    pausedPlayerKey = ""
+    pausedPlayerWasPlaying = false
+  }
+
+  function launchPath(target, kind, codaMode) {
+    if (musicRoot === "") {
+      launchState = "error"
+      launchMessage = musicRootMessage || "The Music folder is unavailable."
+      launchResultChanged()
+      return false
+    }
+    if (launchState === "validating" || launchState === "launching" || launchState === "waiting")
+      return false
+    launchTarget = String(target || "")
+    launchKind = String(kind || "")
+    launchCodaMode = Model.codaIntegrationMode(codaMode)
+    launchBackend = ""
+    launchMessage = "Checking the selection…"
+    launchState = "validating"
+    validateHandled = false
+    validateProc.command = [pluginScript("media-launch"), "--validate-only",
+      "--root", musicRoot, "--target", launchTarget, "--kind", launchKind]
+    validateProc.running = true
+    launchResultChanged()
+    return true
+  }
+
+  function beginValidatedLaunch() {
+    codaSignatureBeforeLaunch = Model.trackSignature(codaPlayer())
+    pauseForHandoff()
+    launchState = "launching"
+    launchMessage = "Starting playback…"
+    launchHandled = false
+    var command = [pluginScript("media-launch"), "--root", musicRoot,
+      "--target", launchTarget, "--kind", launchKind,
+      "--coda-mode", launchCodaMode]
+    if (launchCodaMode === "auto" && codaConnected) command.push("--coda-active")
+    launchProc.command = command
+    launchProc.running = true
+    launchResultChanged()
+  }
+
+  function handleLaunchResponse(payload) {
+    if (launchHandled) return
+    launchHandled = true
+    if (payload.status !== "accepted") {
+      resumePausedPlayer()
+      launchState = "error"
+      launchBackend = String(payload.backend || "")
+      launchMessage = String(payload.message || "Could not start playback.")
+      launchResultChanged()
+      return
+    }
+    launchBackend = String(payload.backend || "")
+    launchMessage = String(payload.message || "Playback request accepted.")
+    if (payload.expectsMpris && launchBackend === "coda") {
+      launchState = "waiting"
+      handoffTimeout.restart()
+      codaPoll.start()
+      tryCodaHandoff()
+    } else {
+      pausedPlayerKey = ""
+      pausedPlayerWasPlaying = false
+      codaSignatureBeforeLaunch = ""
+      launchState = "success"
+      launchResultChanged()
+    }
+  }
+
+  function tryCodaHandoff() {
+    if (launchState !== "waiting") return false
+    var player = codaPlayer()
+    if (!player || !hasTrackMetadata(player)) return false
+    var metadataUrl = Model.metadataText(player.metadata || {}, "xesam:url")
+    var targetMatches = metadataUrl.indexOf("file:") === 0
+      && Model.fileUrlToPath(metadataUrl) === launchTarget
+    if (Model.trackSignature(player) === codaSignatureBeforeLaunch && !targetMatches)
+      return false
+    preferredPlayerKey = playerKey(player)
+    pausedPlayerKey = ""
+    pausedPlayerWasPlaying = false
+    codaSignatureBeforeLaunch = ""
+    launchState = "success"
+    launchBackend = "coda"
+    launchMessage = "Now playing with Coda."
+    handoffTimeout.stop()
+    codaPoll.stop()
+    launchResultChanged()
+    handoffSucceeded()
+    return true
+  }
+
+  function requestCodaStatus() {
+    if (!codaInstalled || !activeIsCoda || codaStatusProc.running) return false
+    codaStatusHandled = false
+    codaStatusState = "loading"
+    codaStatusMessage = ""
+    codaStatusProc.command = [pluginScript("media-launch"), "--coda-status"]
+    codaStatusProc.running = true
+    return true
+  }
+
+  function handleCodaStatusResponse(payload) {
+    if (codaStatusHandled) return
+    codaStatusHandled = true
+    if (payload.status === "accepted" && payload.coda) {
+      codaStatus = payload.coda
+      codaStatusState = "ready"
+      codaStatusMessage = ""
+    } else {
+      codaStatus = ({})
+      codaStatusState = "error"
+      codaStatusMessage = String(payload.message || "Coda status is unavailable.")
+    }
+  }
+
+  function showCoda() {
+    if (!codaInstalled || codaShowProc.running) return false
+    codaShowHandled = false
+    codaShowProc.command = [pluginScript("media-launch"), "--show-coda"]
+    codaShowProc.running = true
+    return true
+  }
+
+  function handleCodaShowResponse(payload) {
+    if (codaShowHandled) return
+    codaShowHandled = true
+    if (payload.status === "accepted") {
+      codaInstalled = true
+      codaStatusMessage = ""
+    } else codaStatusMessage = String(payload.message || "Coda could not be opened.")
+  }
+
+  function isProxyPlayer(player) {
+    return Model.isProxyPlayer(player)
   }
 
   function hasMetadata(player) {
-    return !!(player && (player.trackTitle || player.trackArtist || player.trackAlbum
-      || player.identity || player.desktopEntry))
+    return Model.hasPlayerMetadata(player)
   }
 
   function hasTrackMetadata(player) {
-    return !!(player && (player.trackTitle || player.trackArtist || player.trackAlbum
-      || player.trackArtUrl))
+    return Model.hasTrackMetadata(player)
   }
 
   function playerKey(player) {
-    return player ? String(player.dbusName || player.desktopEntry || player.identity || "") : ""
+    return Model.playerKey(player)
   }
 
   function playerForKey(key) {
@@ -84,52 +278,11 @@ Item {
   }
 
   function orderedPlayers() {
-    var ordered = []
-    for (var i = 0; i < players.length; i++) {
-      if (hasMetadata(players[i])) ordered.push(players[i])
-    }
-    ordered.sort(function(left, right) {
-      var leftPreferred = playerKey(left) === preferredPlayerKey
-      var rightPreferred = playerKey(right) === preferredPlayerKey
-      if (!!left.isPlaying !== !!right.isPlaying) return left.isPlaying ? -1 : 1
-      if (leftPreferred !== rightPreferred) return leftPreferred ? -1 : 1
-      if (isProxyPlayer(left) !== isProxyPlayer(right)) return isProxyPlayer(left) ? 1 : -1
-      var leftLabel = String(left.trackTitle || left.identity || left.desktopEntry || "")
-      var rightLabel = String(right.trackTitle || right.identity || right.desktopEntry || "")
-      return leftLabel.localeCompare(rightLabel)
-    })
-    return ordered
+    return Model.orderedPlayers(players, preferredPlayerKey)
   }
 
   function selectActivePlayer() {
-    var preferred = playerForKey(preferredPlayerKey)
-    if (hasMetadata(preferred) && preferred.isPlaying) return preferred
-
-    var playingProxy = null
-    var trackPlayer = null
-    var trackProxy = null
-    var fallbackProxy = null
-    var fallback = null
-
-    for (var i = 0; i < players.length; i++) {
-      var player = players[i]
-      if (!hasMetadata(player)) continue
-      var proxy = isProxyPlayer(player)
-      if (player.isPlaying) {
-        if (!proxy) return player
-        if (!playingProxy) playingProxy = player
-      } else if (hasTrackMetadata(player)) {
-        if (!proxy && !trackPlayer) trackPlayer = player
-        else if (proxy && !trackProxy) trackProxy = player
-      } else if (!proxy && !fallback) {
-        fallback = player
-      } else if (proxy && !fallbackProxy) {
-        fallbackProxy = player
-      }
-    }
-
-    return playingProxy || (hasMetadata(preferred) ? preferred : null)
-      || trackPlayer || trackProxy || fallback || fallbackProxy
+    return Model.selectActivePlayer(players, preferredPlayerKey)
   }
 
   function playerForAction(action, targetKey) {
@@ -265,6 +418,15 @@ Item {
   }
 
   onTrackSignatureChanged: refreshTrack()
+  onActiveIsCodaChanged: {
+    if (!activeIsCoda) {
+      if (codaStatusProc.running) codaStatusProc.running = false
+      codaStatusHandled = true
+      codaStatus = ({})
+      codaStatusState = "idle"
+      codaStatusMessage = ""
+    }
+  }
   onPrimaryArtUrlChanged: {
     if (primaryArtUrl !== "") {
       coverDelay.stop()
@@ -273,7 +435,31 @@ Item {
       coverDelay.restart()
     }
   }
-  Component.onCompleted: refreshTrack()
+  Component.onCompleted: {
+    refreshTrack()
+    resolveMusicRoot()
+  }
+
+  Timer {
+    id: handoffTimeout
+    interval: 8000
+    repeat: false
+    onTriggered: {
+      if (root.launchState !== "waiting") return
+      codaPoll.stop()
+      root.resumePausedPlayer()
+      root.launchState = "error"
+      root.launchMessage = "Coda did not expose playable media within eight seconds. The previous player was resumed."
+      root.launchResultChanged()
+    }
+  }
+
+  Timer {
+    id: codaPoll
+    interval: 100
+    repeat: true
+    onTriggered: root.tryCodaHandoff()
+  }
 
   Timer {
     id: coverDelay
@@ -319,6 +505,92 @@ Item {
           message: "Could not run the lyrics helper."
         }
       }
+    }
+  }
+
+  Process {
+    id: rootProc
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        var payload = Model.parseHelperResponse(text)
+        root.codaInstalled = !!payload.codaInstalled
+        if (payload.status === "accepted" && payload.root) {
+          root.musicRoot = String(payload.root)
+          root.musicRootMessage = ""
+        } else {
+          root.musicRoot = ""
+          root.musicRootMessage = String(payload.message || "The Music folder is unavailable.")
+        }
+      }
+    }
+  }
+
+  Process {
+    id: validateProc
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        if (root.validateHandled || root.launchState !== "validating") return
+        root.validateHandled = true
+        var payload = Model.parseHelperResponse(text)
+        if (payload.status === "accepted") {
+          root.launchTarget = String(payload.target || root.launchTarget)
+          root.beginValidatedLaunch()
+        }
+        else {
+          root.launchState = "error"
+          root.launchMessage = String(payload.message || "The selection is not playable.")
+          root.launchResultChanged()
+        }
+      }
+    }
+    onExited: function(exitCode) {
+      if (exitCode !== 0 && !root.validateHandled && root.launchState === "validating") {
+        root.validateHandled = true
+        root.launchState = "error"
+        root.launchMessage = "Could not validate the selected music."
+        root.launchResultChanged()
+      }
+    }
+  }
+
+  Process {
+    id: launchProc
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: root.handleLaunchResponse(Model.parseHelperResponse(text))
+    }
+    onExited: function(exitCode) {
+      if (exitCode !== 0 && !root.launchHandled)
+        root.handleLaunchResponse({ status: "error", backend: "", expectsMpris: false,
+          message: "The music launcher exited before accepting playback." })
+    }
+  }
+
+  Process {
+    id: codaStatusProc
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: root.handleCodaStatusResponse(Model.parseHelperResponse(text))
+    }
+    onExited: function(exitCode) {
+      if (exitCode !== 0 && !root.codaStatusHandled)
+        root.handleCodaStatusResponse({ status: "error",
+          message: "Coda status could not be read." })
+    }
+  }
+
+  Process {
+    id: codaShowProc
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: root.handleCodaShowResponse(Model.parseHelperResponse(text))
+    }
+    onExited: function(exitCode) {
+      if (exitCode !== 0 && !root.codaShowHandled)
+        root.handleCodaShowResponse({ status: "error",
+          message: "Coda could not be opened." })
     }
   }
 

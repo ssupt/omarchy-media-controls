@@ -2,9 +2,9 @@
   "schemaVersion": 1,
   "id": "ssupt.media-controls",
   "name": "Media Controls",
-  "version": "0.1.0",
+  "version": "0.3.0",
   "author": "ssupt",
-  "description": "Adaptive MPRIS playback controls with album artwork and local-first lyrics",
+  "description": "Monumental MPRIS controls with artwork, lyrics, archive browsing, and optional Coda integration",
   "kinds": [
     "service",
     "bar-widget"
@@ -16,7 +16,7 @@
   },
   "barWidget": {
     "displayName": "Media Controls",
-    "description": "Now-playing artwork, playback controls, and a lyrics window",
+    "description": "Browse the local archive or control an active MPRIS player",
     "category": "Media",
     "allowMultiple": false,
     "defaultSection": "center"

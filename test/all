@@ -9,7 +9,7 @@ fail() {
   exit 1
 }
 
-python3 - "$ROOT/scripts/media-cover" "$ROOT/scripts/media-lyrics" <<'PY'
+python3 - "$ROOT/scripts/media-cover" "$ROOT/scripts/media-lyrics" "$ROOT/scripts/media-launch" <<'PY'
 from pathlib import Path
 import sys
 
@@ -18,21 +18,28 @@ for source in sys.argv[1:]:
 print("PASS: helper syntax")
 PY
 
+[[ -x "$ROOT/scripts/media-launch" ]] || fail "media-launch must be executable"
 command -v qmllint >/dev/null 2>&1 || fail "qmllint is required"
 OMARCHY_ROOT=${OMARCHY_PATH:-/usr/share/omarchy}
 [[ -d "$OMARCHY_ROOT/shell" ]] || fail "Omarchy shell imports not found under $OMARCHY_ROOT"
 while IFS= read -r source; do
   qmllint -I "$OMARCHY_ROOT/shell" "$ROOT/$source" \
     || fail "QML validation: $source"
-done < <(jq -r '.entryPoints[] | select(type == "string" and endswith(".qml"))' "$ROOT/manifest.json")
+done < <(cd "$ROOT" && rg --files -g '*.qml' | sort)
 echo "PASS: QML syntax and imports"
 
-node - "$ROOT/Model.js" "$ROOT/BarWidget.qml" "$ROOT/Service.qml" <<'JS'
+node - "$ROOT/Model.js" "$ROOT/BarWidget.qml" "$ROOT/Service.qml" \
+  "$ROOT/PlayerWindow.qml" "$ROOT/MusicBrowser.qml" \
+  "$ROOT/MonumentStyle.qml" "$ROOT/MonumentButton.qml" <<'JS'
 const assert = require('node:assert/strict')
 const fs = require('node:fs')
 const model = require(process.argv[2])
 const barSource = fs.readFileSync(process.argv[3], 'utf8')
 const serviceSource = fs.readFileSync(process.argv[4], 'utf8')
+const playerSource = fs.readFileSync(process.argv[5], 'utf8')
+const browserSource = fs.readFileSync(process.argv[6], 'utf8')
+const monumentSource = fs.readFileSync(process.argv[7], 'utf8')
+const monumentButtonSource = fs.readFileSync(process.argv[8], 'utf8')
 
 assert.equal(model.metadataText({ 'xesam:url': 'file:///music/song.flac' }, 'xesam:url'), 'file:///music/song.flac')
 assert.equal(model.metadataText({ 'xesam:artist': ['One', 'Two'] }, 'xesam:artist'), 'One, Two')
@@ -54,6 +61,18 @@ assert.equal(model.isVerticalPosition('bottom'), false)
 assert.equal(model.isVerticalPosition('left'), true)
 assert.equal(model.isVerticalPosition('right'), true)
 assert.equal(model.lyricsSourceLabel('embedded'), 'Embedded in audio file')
+assert.equal(model.pathToFileUrl('/Music/Björk #1'), 'file:///Music/Bj%C3%B6rk%20%231')
+assert.equal(model.fileUrlToPath('file:///Music/Bj%C3%B6rk%20%231'), '/Music/Björk #1')
+assert.equal(model.booleanValue('off', true), false)
+assert.equal(model.booleanValue('yes', false), true)
+assert.equal(model.booleanValue('invalid', true), true)
+assert.equal(model.codaIntegrationMode('off'), 'off')
+assert.equal(model.codaIntegrationMode('prefer'), 'prefer')
+assert.equal(model.codaIntegrationMode('unexpected'), 'auto')
+assert.deepEqual(model.parseHelperResponse('{"status":"accepted","backend":"coda"}'), {
+  status: 'accepted', backend: 'coda'
+})
+assert.equal(model.parseHelperResponse('broken').status, 'error')
 
 const stream = {
   dbusName: 'org.mpris.MediaPlayer2.stream', uniqueId: 7,
@@ -64,21 +83,74 @@ const streamLater = { ...stream, length: 500 }
 assert.equal(model.trackSignature(stream), model.trackSignature(streamLater))
 assert.notEqual(model.trackSignature(stream), model.trackSignature({ ...stream, uniqueId: 8 }))
 
+const nativePlaying = {
+  dbusName: 'org.mpris.MediaPlayer2.coda', identity: 'Coda',
+  trackTitle: 'Local song', isPlaying: true
+}
+const proxyPlaying = {
+  dbusName: 'org.mpris.MediaPlayer2.playerctld', identity: 'Playerctld',
+  trackTitle: 'Proxy song', isPlaying: true
+}
+const preferredPaused = {
+  dbusName: 'org.mpris.MediaPlayer2.spotify', identity: 'Spotify',
+  trackTitle: 'Paused song', isPlaying: false
+}
+assert.equal(model.selectActivePlayer([proxyPlaying, nativePlaying, preferredPaused], ''), nativePlaying)
+assert.equal(model.selectActivePlayer([proxyPlaying, preferredPaused], ''), proxyPlaying)
+assert.equal(model.selectActivePlayer([preferredPaused], preferredPaused.dbusName), preferredPaused)
+assert.deepEqual(
+  model.orderedPlayers([preferredPaused, proxyPlaying, nativePlaying], preferredPaused.dbusName),
+  [nativePlaying, proxyPlaying, preferredPaused]
+)
+
 assert.match(barSource, /action: "previous"/)
 assert.match(barSource, /action: "playPause"/)
 assert.match(barSource, /action: "next"/)
 assert.match(barSource, /horizontalLayout/)
 assert.match(barSource, /verticalLayout/)
 assert.match(barSource, /root\.openDetails\(\)/)
-assert.match(barSource, /owner: panel/)
+assert.match(barSource, /visible: hasMedia \|\| showWhenIdle/)
+assert.match(barSource, /root\.setting\("codaIntegration", "auto"\)/)
+assert.match(barSource, /text: "ARCHIVE"/)
+assert.match(barSource, /PlayerWindow/)
+assert.doesNotMatch(barSource, /KeyboardPanel/)
 assert.match(barSource, /anchors\.verticalCenter: parent\.verticalCenter/)
 assert.match(barSource, /status === Image\.Ready/)
-assert.match(barSource, /requestLyrics/)
-assert.match(barSource, /root\.lyricsDisplayText\(\)/)
 assert.match(barSource, /activePlayer\.position = next/)
+assert.match(playerSource, /KeyboardPanel/)
+assert.match(playerSource, /owner: root/)
+assert.match(playerSource, /MusicBrowser/)
+assert.match(playerSource, /MonumentSectionHeader/)
+assert.match(playerSource, /title: "Transmission chamber"/)
+assert.match(playerSource, /controlsService\.requestCodaStatus\(\)/)
+assert.match(playerSource, /integrationMode !== "off"/)
+assert.match(playerSource, /Accessible\.name: "Browse music archive"/)
+assert.match(playerSource, /root\.controller\.lyricsDisplayText\(\)/)
+assert.match(browserSource, /FolderListModel/)
+assert.match(browserSource, /rootFolder: root\.rootUrl/)
+assert.match(browserSource, /caseSensitive: false/)
+assert.match(browserSource, /numericMode: true/)
+assert.match(browserSource, /reuseItems: true/)
+assert.match(browserSource, /Qt\.ControlModifier/)
+assert.match(browserSource, /Qt\.Key_Backspace/)
+assert.match(browserSource, /property string integrationMode: "auto"/)
+assert.match(browserSource, /MonumentTabButton/)
+assert.match(browserSource, /"OUTPUT ROUTE \/\/ " \+ root\.routeLabel\(\)/)
+assert.match(monumentSource, /readonly property color authority: "#603536"/)
+assert.match(monumentSource, /assets\/fonts\/DINish-Regular\.ttf/)
+assert.match(monumentSource, /assets\/fonts\/HakkouMincho\.ttf/)
+assert.match(monumentButtonSource, /control\.activeFocus \? control\.monument\.warning/)
 assert.match(serviceSource, /Quickshell\.Services\.Mpris/)
 assert.match(serviceSource, /readonly property var players: Mpris\.players/)
 assert.match(serviceSource, /activePlayer\.lengthSupported/)
+assert.match(serviceSource, /interval: 8000/)
+assert.match(serviceSource, /resumePausedPlayer\(\)/)
+assert.match(serviceSource, /codaSignatureBeforeLaunch/)
+assert.match(serviceSource, /handoffSucceeded\(\)/)
+assert.match(serviceSource, /property string launchCodaMode: "auto"/)
+assert.match(serviceSource, /function requestCodaStatus\(\)/)
+assert.match(serviceSource, /!codaInstalled \|\| !activeIsCoda/)
+assert.match(serviceSource, /"--coda-mode", launchCodaMode/)
 assert.match(serviceSource, /target: "media"/)
 console.log('PASS: media model and UI contract')
 JS
@@ -157,13 +229,345 @@ with tempfile.TemporaryDirectory() as directory:
 print("PASS: local media and lyrics helpers")
 PY
 
+python3 - "$ROOT/scripts/media-launch" <<'PY'
+import json
+import os
+from pathlib import Path
+import socket
+import stat
+import subprocess
+import sys
+import tempfile
+import time
+
+
+launcher = Path(sys.argv[1])
+
+
+def invoke(arguments, environment):
+    completed = subprocess.run(
+        [sys.executable, str(launcher), *arguments], env=environment,
+        capture_output=True, text=True, check=False, timeout=15,
+    )
+    try:
+        payload = json.loads(completed.stdout)
+    except json.JSONDecodeError as error:
+        raise AssertionError(f"invalid launcher response: {completed.stdout!r}") from error
+    return completed, payload
+
+
+def executable(path, body):
+    path.write_text("#!/usr/bin/python3\n" + body, encoding="utf-8")
+    path.chmod(path.stat().st_mode | stat.S_IXUSR)
+    return path
+
+
+def json_lines(path):
+    if not path.exists():
+        return []
+    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line]
+
+
+def stop_fake_mpv(socket_path):
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+            client.settimeout(1)
+            client.connect(str(socket_path))
+            client.sendall(json.dumps({
+                "command": ["quit"], "request_id": "test-cleanup"
+            }).encode("utf-8") + b"\n")
+            client.recv(4096)
+    except OSError:
+        pass
+    for _ in range(100):
+        if not socket_path.exists():
+            return
+        time.sleep(0.01)
+
+
+with tempfile.TemporaryDirectory(prefix="media-controls-test-") as temporary:
+    sandbox = Path(temporary)
+    music = sandbox / "Music ü"
+    album = music / "Album"
+    album.mkdir(parents=True)
+    first = album / "Track 1.FLAC"
+    selected = album / "Track 2.mp3"
+    tenth = album / "Track 10.ogg"
+    for track in (first, selected, tenth):
+        track.write_bytes(b"audio")
+    (album / ".hidden.mp3").write_bytes(b"hidden")
+    (album / "notes.txt").write_text("not audio", encoding="utf-8")
+
+    environment = os.environ.copy()
+    environment["XDG_RUNTIME_DIR"] = str(sandbox / "runtime")
+    environment["MEDIA_CONTROLS_MUSIC_DIR"] = str(music)
+    completed, payload = invoke(["--resolve-root"], environment)
+    assert completed.returncode == 0
+    assert payload["status"] == "accepted" and payload["root"] == str(music.resolve())
+    assert all(isinstance(payload[key], bool) for key in (
+        "codaInstalled", "mpvInstalled", "xdgOpenInstalled"
+    ))
+
+    fake_xdg = executable(
+        sandbox / "xdg-user-dir",
+        "import os\nprint(os.environ['TEST_MUSIC_ROOT'])\n",
+    )
+    xdg_environment = environment.copy()
+    xdg_environment.pop("MEDIA_CONTROLS_MUSIC_DIR")
+    xdg_environment["MEDIA_CONTROLS_XDG_USER_DIR"] = str(fake_xdg)
+    xdg_environment["TEST_MUSIC_ROOT"] = str(music)
+    _, payload = invoke(["--resolve-root"], xdg_environment)
+    assert payload["status"] == "accepted" and payload["root"] == str(music.resolve())
+
+    home = sandbox / "home"
+    home_music = home / "Music"
+    home_music.mkdir(parents=True)
+    home_environment = environment.copy()
+    home_environment.pop("MEDIA_CONTROLS_MUSIC_DIR")
+    home_environment["MEDIA_CONTROLS_XDG_USER_DIR"] = str(sandbox / "missing-xdg")
+    home_environment["HOME"] = str(home)
+    _, payload = invoke(["--resolve-root"], home_environment)
+    assert payload["status"] == "accepted" and payload["root"] == str(home_music.resolve())
+
+    missing_home = sandbox / "missing-home"
+    missing_environment = home_environment.copy()
+    missing_environment["HOME"] = str(missing_home)
+    _, payload = invoke(["--resolve-root"], missing_environment)
+    assert payload["status"] == "error"
+    assert all(isinstance(payload[key], bool) for key in (
+        "codaInstalled", "mpvInstalled", "xdgOpenInstalled"
+    ))
+    assert not (missing_home / "Music").exists()
+
+    common = ["--root", str(music), "--target", str(selected), "--kind", "file"]
+    completed, payload = invoke(["--validate-only", *common], environment)
+    assert completed.returncode == 0 and payload["target"] == str(selected.resolve())
+
+    outside = sandbox / "outside.mp3"
+    outside.write_bytes(b"audio")
+    completed, payload = invoke([
+        "--validate-only", "--root", str(music), "--target", str(outside), "--kind", "file"
+    ], environment)
+    assert completed.returncode != 0 and payload["status"] == "error"
+
+    collection = music / "Collection"
+    (collection / "Disc 2").mkdir(parents=True)
+    (collection / "Disc 10").mkdir()
+    disc_two = collection / "Disc 2" / "Song 2.OPUS"
+    disc_ten = collection / "Disc 10" / "Song 10.wav"
+    root_song = collection / "Song 1.m4a"
+    for track in (disc_two, disc_ten, root_song):
+        track.write_bytes(b"audio")
+    hidden_dir = collection / ".private"
+    hidden_dir.mkdir()
+    (hidden_dir / "secret.mp3").write_bytes(b"audio")
+    linked_dir = music / "Linked collection"
+    linked_dir.symlink_to(collection, target_is_directory=True)
+    completed, payload = invoke([
+        "--validate-only", "--root", str(music), "--target", str(linked_dir), "--kind", "folder"
+    ], environment)
+    assert completed.returncode != 0 and payload["status"] == "error"
+
+    log = sandbox / "arguments.json"
+    mpv_start_log = sandbox / "mpv-starts.jsonl"
+    mpv_command_log = sandbox / "mpv-commands.jsonl"
+    mpv_error_log = sandbox / "mpv-error.txt"
+    coda = executable(
+        sandbox / "coda",
+        "import json, os, sys\n"
+        "arguments = sys.argv[1:]\n"
+        "open(os.environ['TEST_ARGUMENT_LOG'], 'w', encoding='utf-8').write(json.dumps(arguments))\n"
+        "if arguments == ['status', '--json']:\n"
+        "    print(json.dumps({'version': 1, 'direct': True, 'queueLength': 3, "
+        "'currentIndex': 1, 'signal': '24-bit / 96 kHz'}))\n"
+        "    raise SystemExit(0)\n"
+        "raise SystemExit(int(os.environ.get('TEST_CODA_EXIT', '0')))\n",
+    )
+    mpv = executable(
+        sandbox / "mpv",
+        "import json, os, socket, sys, traceback\n"
+        "def report_error(error_type, error, trace):\n"
+        "    with open(os.environ['TEST_MPV_ERROR_LOG'], 'w', encoding='utf-8') as handle:\n"
+        "        traceback.print_exception(error_type, error, trace, file=handle)\n"
+        "sys.excepthook = report_error\n"
+        "arguments = sys.argv[1:]\n"
+        "with open(os.environ['TEST_MPV_START_LOG'], 'a', encoding='utf-8') as handle:\n"
+        "    handle.write(json.dumps(arguments) + '\\n')\n"
+        "prefix = '--input-ipc-server='\n"
+        "socket_argument = next((value for value in arguments if value.startswith(prefix)), '')\n"
+        "if not socket_argument:\n"
+        "    raise SystemExit(2)\n"
+        "socket_path = socket_argument.split('=', 1)[1]\n"
+        "try:\n"
+        "    os.unlink(socket_path)\n"
+        "except FileNotFoundError:\n"
+        "    pass\n"
+        "server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)\n"
+        "server.bind(socket_path)\n"
+        "os.chmod(socket_path, 0o600)\n"
+        "server.listen()\n"
+        "server.settimeout(30)\n"
+        "running = True\n"
+        "while running:\n"
+        "    try:\n"
+        "        connection, _ = server.accept()\n"
+        "    except socket.timeout:\n"
+        "        break\n"
+        "    with connection, connection.makefile('rwb', buffering=0) as stream:\n"
+        "        while True:\n"
+        "            line = stream.readline()\n"
+        "            if not line:\n"
+        "                break\n"
+        "            request = json.loads(line)\n"
+        "            command = request.get('command', [])\n"
+        "            with open(os.environ['TEST_MPV_COMMAND_LOG'], 'a', encoding='utf-8') as handle:\n"
+        "                handle.write(json.dumps(command) + '\\n')\n"
+        "            response = {'error': 'success', 'request_id': request.get('request_id')}\n"
+        "            if command[:2] == ['get_property', 'mpv-version']:\n"
+        "                response['data'] = '0.41.0'\n"
+        "            if command and command[0] == 'quit':\n"
+        "                running = False\n"
+        "            stream.write(json.dumps(response).encode('utf-8') + b'\\n')\n"
+        "            if not running:\n"
+        "                break\n"
+        "server.close()\n"
+        "try:\n"
+        "    os.unlink(socket_path)\n"
+        "except FileNotFoundError:\n"
+        "    pass\n",
+    )
+    opener = executable(
+        sandbox / "xdg-open",
+        "import json, os, sys\n"
+        "open(os.environ['TEST_ARGUMENT_LOG'], 'w', encoding='utf-8').write(json.dumps(sys.argv[1:]))\n",
+    )
+    launch_environment = environment.copy()
+    launch_environment.update({
+        "MEDIA_CONTROLS_CODA": str(coda),
+        "MEDIA_CONTROLS_MPV": str(mpv),
+        "MEDIA_CONTROLS_XDG_OPEN": str(opener),
+        "TEST_ARGUMENT_LOG": str(log),
+        "TEST_MPV_START_LOG": str(mpv_start_log),
+        "TEST_MPV_COMMAND_LOG": str(mpv_command_log),
+        "TEST_MPV_ERROR_LOG": str(mpv_error_log),
+    })
+
+    completed, payload = invoke(common, launch_environment)
+    assert completed.returncode == 0
+    assert payload["backend"] == "mpv" and payload["expectsMpris"] is False, {
+        "payload": payload,
+        "starts": json_lines(mpv_start_log),
+        "commands": json_lines(mpv_command_log),
+        "error": mpv_error_log.read_text(encoding="utf-8") if mpv_error_log.exists() else "",
+    }
+    assert payload["message"].startswith("Started one reusable mpv session.")
+    mpv_starts = json_lines(mpv_start_log)
+    assert len(mpv_starts) == 1
+    assert "--idle=yes" in mpv_starts[0]
+    socket_argument = next(
+        value for value in mpv_starts[0] if value.startswith("--input-ipc-server=")
+    )
+    mpv_socket = Path(socket_argument.split("=", 1)[1])
+    assert mpv_socket == Path(environment["XDG_RUNTIME_DIR"]) / "omarchy-media-controls" / "mpv.sock"
+    assert stat.S_IMODE(mpv_socket.stat().st_mode) == 0o600
+    first_commands = json_lines(mpv_command_log)
+    assert first_commands[-3] == ["get_property", "mpv-version"]
+    assert first_commands[-2][0] == "loadlist" and first_commands[-2][2] == "replace"
+    assert first_commands[-1] == ["playlist-play-index", 1]
+    playlist = Path(first_commands[-2][1])
+    playlist_lines = playlist.read_text(encoding="utf-8").splitlines()
+    assert playlist_lines == ["#EXTM3U", first.resolve().as_uri(), selected.resolve().as_uri(), tenth.resolve().as_uri()]
+    assert stat.S_IMODE(playlist.stat().st_mode) == 0o600
+    first_playlist_path = playlist
+
+    _, payload = invoke(common, launch_environment)
+    assert payload["backend"] == "mpv"
+    assert payload["message"].startswith("Loaded in the existing mpv session.")
+    assert len(json_lines(mpv_start_log)) == 1
+    repeat_commands = json_lines(mpv_command_log)[-3:]
+    assert repeat_commands[0] == ["get_property", "mpv-version"]
+    assert Path(repeat_commands[1][1]) == first_playlist_path
+    assert repeat_commands[2] == ["playlist-play-index", 1]
+
+    completed, payload = invoke(["--coda-active", *common], launch_environment)
+    assert completed.returncode == 0
+    assert payload == {
+        "status": "accepted", "backend": "coda", "expectsMpris": True,
+        "message": "Starting in Coda…",
+    }
+    assert json.loads(log.read_text(encoding="utf-8")) == [
+        "play", "--mode=replace", "--context=siblings", "--no-raise", "--", str(selected.resolve())
+    ]
+
+    completed, payload = invoke(["--coda-mode", "prefer", *common], launch_environment)
+    assert completed.returncode == 0 and payload["backend"] == "coda"
+
+    completed, payload = invoke([
+        "--coda-mode", "off", "--coda-active", *common
+    ], launch_environment)
+    assert completed.returncode == 0 and payload["backend"] == "mpv"
+    assert len(json_lines(mpv_start_log)) == 1
+    assert json_lines(mpv_command_log)[-1] == ["playlist-play-index", 1]
+
+    completed, payload = invoke(["--coda-status"], launch_environment)
+    assert completed.returncode == 0
+    assert payload["status"] == "accepted" and payload["backend"] == "coda"
+    assert payload["coda"] == {
+        "version": 1, "direct": True, "queueLength": 3,
+        "currentIndex": 1, "signal": "24-bit / 96 kHz",
+    }
+    assert json.loads(log.read_text(encoding="utf-8")) == ["status", "--json"]
+
+    completed, payload = invoke(["--show-coda"], launch_environment)
+    assert completed.returncode == 0
+    assert payload["status"] == "accepted" and payload["backend"] == "coda"
+    assert json.loads(log.read_text(encoding="utf-8")) == ["show"]
+
+    launch_environment["TEST_CODA_EXIT"] = "3"
+    completed, payload = invoke(["--coda-mode", "prefer", *common], launch_environment)
+    assert completed.returncode == 0 and payload["backend"] == "mpv"
+    assert payload["expectsMpris"] is False
+
+    folder_arguments = ["--root", str(music), "--target", str(collection), "--kind", "folder"]
+    _, payload = invoke(folder_arguments, launch_environment)
+    assert payload["backend"] == "mpv"
+    assert len(json_lines(mpv_start_log)) == 1
+    recursive_commands = json_lines(mpv_command_log)[-3:]
+    assert recursive_commands[0] == ["get_property", "mpv-version"]
+    assert recursive_commands[1][0] == "loadlist"
+    assert recursive_commands[2] == ["playlist-play-index", 0]
+    recursive_playlist = Path(recursive_commands[1][1])
+    recursive_lines = recursive_playlist.read_text(encoding="utf-8").splitlines()[1:]
+    assert recursive_lines == [
+        disc_two.resolve().as_uri(), disc_ten.resolve().as_uri(), root_song.resolve().as_uri()
+    ]
+    assert all(".private" not in line and "Linked" not in line for line in recursive_lines)
+
+    opener_environment = launch_environment.copy()
+    opener_environment["MEDIA_CONTROLS_CODA"] = str(sandbox / "missing-coda")
+    opener_environment["MEDIA_CONTROLS_MPV"] = str(sandbox / "missing-mpv")
+    _, payload = invoke(folder_arguments, opener_environment)
+    assert payload["backend"] == "xdg-open" and payload["expectsMpris"] is False
+    assert json.loads(log.read_text(encoding="utf-8")) == [str(collection.resolve())]
+
+    failed_environment = opener_environment.copy()
+    failed_environment["MEDIA_CONTROLS_XDG_OPEN"] = str(sandbox / "missing-xdg-open")
+    completed, payload = invoke(common, failed_environment)
+    assert completed.returncode != 0
+    assert set(payload) == {"status", "backend", "expectsMpris", "message"}
+    assert payload["status"] == "error"
+
+    stop_fake_mpv(mpv_socket)
+
+print("PASS: music root, validation, persistent mpv, ordering, and launcher fallbacks")
+PY
+
 jq -e '
   .schemaVersion == 1
   and .id == "ssupt.media-controls"
-  and .version == "0.1.0"
+  and .version == "0.3.0"
   and .author == "ssupt"
-  and (.kinds | index("service") != null)
-  and (.kinds | index("bar-widget") != null)
+  and .kinds == ["service", "bar-widget"]
   and (.kinds | index("panel") == null)
   and .entryPoints.service == "Service.qml"
   and .entryPoints.barWidget == "BarWidget.qml"

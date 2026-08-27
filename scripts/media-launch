@@ -1,0 +1,545 @@
+#!/usr/bin/python3
+
+"""Safely launch local music from the Omarchy media-controls browser.
+
+Every subprocess is executed with an argument array.  The public launch result
+is one compact JSON object so QML never needs to parse human command output.
+"""
+
+from __future__ import annotations
+
+import argparse
+import fcntl
+import hashlib
+import json
+import os
+from pathlib import Path
+import re
+import shutil
+import socket
+import stat
+import subprocess
+import sys
+import tempfile
+import time
+from typing import Iterable
+
+
+SUPPORTED_EXTENSIONS = {
+    ".flac", ".mp3", ".ogg", ".oga", ".opus", ".m4a", ".mp4",
+    ".aac", ".alac", ".wav", ".wave",
+}
+
+
+class LaunchError(Exception):
+    """A safe, user-facing validation or launch failure."""
+
+
+class MpvIpcError(Exception):
+    """The private mpv IPC session was unavailable or rejected a command."""
+
+
+class MpvIpcStale(MpvIpcError):
+    """The private mpv socket exists but has no listening process."""
+
+
+def emit(payload: dict, exit_code: int = 0) -> int:
+    print(json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
+    return exit_code
+
+
+def launch_response(status: str, backend: str, expects_mpris: bool, message: str) -> dict:
+    return {
+        "status": status,
+        "backend": backend,
+        "expectsMpris": expects_mpris,
+        "message": message,
+    }
+
+
+def capabilities() -> dict:
+    return {
+        "codaInstalled": executable("MEDIA_CONTROLS_CODA", "coda") is not None,
+        "mpvInstalled": executable("MEDIA_CONTROLS_MPV", "mpv") is not None,
+        "xdgOpenInstalled": executable("MEDIA_CONTROLS_XDG_OPEN", "xdg-open") is not None,
+    }
+
+
+def executable(env_name: str, command: str) -> str | None:
+    override = os.environ.get(env_name, "").strip()
+    if override:
+        candidate = Path(override).expanduser()
+        return str(candidate) if candidate.is_file() and os.access(candidate, os.X_OK) else None
+    return shutil.which(command)
+
+
+def resolve_music_root() -> Path:
+    override = os.environ.get("MEDIA_CONTROLS_MUSIC_DIR", "").strip()
+    if override:
+        candidate = Path(override).expanduser()
+    else:
+        candidate = None
+        xdg = executable("MEDIA_CONTROLS_XDG_USER_DIR", "xdg-user-dir")
+        if xdg:
+            try:
+                completed = subprocess.run(
+                    [xdg, "MUSIC"], capture_output=True, text=True, check=False, timeout=3
+                )
+                value = completed.stdout.strip() if completed.returncode == 0 else ""
+                if value:
+                    candidate = Path(os.path.expandvars(value)).expanduser()
+            except (OSError, subprocess.SubprocessError):
+                candidate = None
+        if candidate is None:
+            candidate = Path.home() / "Music"
+
+    try:
+        resolved = candidate.resolve(strict=True)
+    except OSError as error:
+        raise LaunchError(f"Music folder does not exist: {candidate}") from error
+    if not resolved.is_dir() or not os.access(resolved, os.R_OK | os.X_OK):
+        raise LaunchError(f"Music folder is not readable: {resolved}")
+    return resolved
+
+
+def natural_key(value: str) -> tuple:
+    parts: list[tuple[int, object, object]] = []
+    for part in re.split(r"(\d+)", value.casefold()):
+        if not part:
+            continue
+        if part.isdigit():
+            parts.append((0, int(part), len(part)))
+        else:
+            parts.append((1, part, ""))
+    return tuple(parts)
+
+
+def supported_file(path: Path) -> bool:
+    return path.suffix.casefold() in SUPPORTED_EXTENSIONS
+
+
+def safe_resolve(root: Path, target: Path) -> Path:
+    try:
+        resolved = target.expanduser().resolve(strict=True)
+        resolved.relative_to(root)
+    except (OSError, ValueError) as error:
+        raise LaunchError("Selected item is outside the configured music folder or no longer exists.") from error
+    if not os.access(resolved, os.R_OK):
+        raise LaunchError(f"Selected item is not readable: {resolved.name}")
+    return resolved
+
+
+def sibling_files(root: Path, selected: Path) -> list[Path]:
+    tracks: list[Path] = []
+    try:
+        entries = list(selected.parent.iterdir())
+    except OSError as error:
+        raise LaunchError(f"Could not read {selected.parent.name}.") from error
+    for entry in entries:
+        if entry.name.startswith("."):
+            continue
+        try:
+            canonical = entry.resolve(strict=True)
+            canonical.relative_to(root)
+            if canonical.is_file() and supported_file(canonical) and os.access(canonical, os.R_OK):
+                tracks.append(canonical)
+        except (OSError, ValueError):
+            continue
+    tracks.sort(key=lambda path: natural_key(path.name))
+    return tracks
+
+
+def recursive_files(root: Path, selected: Path) -> list[Path]:
+    tracks: list[Path] = []
+    for directory, names, files in os.walk(selected, topdown=True, followlinks=False):
+        directory_path = Path(directory)
+        readable_names: list[str] = []
+        for name in names:
+            candidate = directory_path / name
+            if name.startswith(".") or candidate.is_symlink():
+                continue
+            if os.access(candidate, os.R_OK | os.X_OK):
+                readable_names.append(name)
+        names[:] = sorted(readable_names, key=natural_key)
+        for name in sorted(files, key=natural_key):
+            if name.startswith("."):
+                continue
+            candidate = directory_path / name
+            try:
+                canonical = candidate.resolve(strict=True)
+                canonical.relative_to(root)
+            except (OSError, ValueError):
+                continue
+            if canonical.is_file() and supported_file(canonical) and os.access(canonical, os.R_OK):
+                tracks.append(canonical)
+    tracks.sort(key=lambda path: natural_key(path.relative_to(selected).as_posix()))
+    return tracks
+
+
+def validate_target(root_value: str, target_value: str, kind: str) -> tuple[Path, Path, list[Path], int]:
+    root = Path(root_value).expanduser().resolve(strict=True)
+    if not root.is_dir() or not os.access(root, os.R_OK | os.X_OK):
+        raise LaunchError("The configured music folder is missing or unreadable.")
+    raw_target = Path(target_value).expanduser()
+    if kind == "folder" and raw_target.is_symlink():
+        raise LaunchError("The selected item is not a playable folder.")
+    target = safe_resolve(root, raw_target)
+    if kind == "file":
+        if not target.is_file() or not supported_file(target):
+            raise LaunchError("The selected item is not a supported audio file.")
+        tracks = sibling_files(root, target)
+        if target not in tracks:
+            raise LaunchError("The selected audio file is no longer readable.")
+        return root, target, tracks, tracks.index(target)
+    if kind == "folder":
+        if not target.is_dir():
+            raise LaunchError("The selected item is not a playable folder.")
+        tracks = recursive_files(root, target)
+        if not tracks:
+            raise LaunchError("This folder contains no readable supported audio files.")
+        return root, target, tracks, 0
+    raise LaunchError(f"Unknown target kind: {kind}")
+
+
+def runtime_directory() -> Path:
+    runtime = os.environ.get("XDG_RUNTIME_DIR", "").strip()
+    base = Path(runtime) if runtime else Path(tempfile.gettempdir()) / f"omarchy-media-controls-{os.getuid()}"
+    directory = base / "omarchy-media-controls"
+    directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+    os.chmod(directory, 0o700)
+    return directory
+
+
+def write_playlist(root: Path, target: Path, kind: str, tracks: Iterable[Path]) -> Path:
+    signature = f"{root}\0{target}\0{kind}".encode("utf-8", errors="surrogateescape")
+    destination = runtime_directory() / f"{hashlib.sha256(signature).hexdigest()}.m3u8"
+    lines = ["#EXTM3U", *(track.as_uri() for track in tracks)]
+    temporary_name = ""
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", prefix=".playlist-", suffix=".tmp",
+            dir=destination.parent, delete=False
+        ) as temporary:
+            temporary_name = temporary.name
+            temporary.write("\n".join(lines) + "\n")
+        os.chmod(temporary_name, 0o600)
+        os.replace(temporary_name, destination)
+        temporary_name = ""
+    finally:
+        if temporary_name:
+            try:
+                Path(temporary_name).unlink()
+            except OSError:
+                pass
+    return destination
+
+
+def spawn_best_effort(arguments: list[str]) -> bool:
+    try:
+        process = subprocess.Popen(
+            arguments, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL, start_new_session=True,
+        )
+        try:
+            return process.wait(timeout=0.15) == 0
+        except subprocess.TimeoutExpired:
+            return True
+    except OSError:
+        return False
+
+
+def mpv_ipc_exchange(socket_path: Path, commands: list[list[object]]) -> list[object]:
+    """Send ordered commands to the plugin-owned mpv socket and verify replies."""
+    try:
+        metadata = socket_path.lstat()
+    except OSError as error:
+        raise MpvIpcStale(f"mpv IPC is unavailable: {error}") from error
+    if not stat.S_ISSOCK(metadata.st_mode) or metadata.st_uid != os.getuid():
+        raise MpvIpcError("mpv IPC path is not a user-owned Unix socket")
+
+    results: list[object] = []
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+            client.settimeout(1.5)
+            client.connect(str(socket_path))
+            with client.makefile("rwb", buffering=0) as stream:
+                for index, command in enumerate(commands):
+                    request_id = f"omarchy-media-controls-{index}"
+                    request = json.dumps(
+                        {"command": command, "request_id": request_id},
+                        ensure_ascii=False, separators=(",", ":"),
+                    ).encode("utf-8") + b"\n"
+                    stream.write(request)
+                    for _ in range(64):
+                        line = stream.readline(1024 * 1024)
+                        if not line:
+                            raise MpvIpcError("mpv closed its IPC connection")
+                        if len(line) >= 1024 * 1024 and not line.endswith(b"\n"):
+                            raise MpvIpcError("mpv returned an oversized IPC response")
+                        try:
+                            response = json.loads(line)
+                        except (UnicodeDecodeError, json.JSONDecodeError):
+                            continue
+                        if response.get("request_id") != request_id:
+                            continue
+                        if response.get("error") != "success":
+                            raise MpvIpcError(
+                                f"mpv rejected {command[0]}: "
+                                f"{response.get('error', 'unknown error')}"
+                            )
+                        results.append(response.get("data"))
+                        break
+                    else:
+                        raise MpvIpcError("mpv did not acknowledge an IPC command")
+    except (ConnectionRefusedError, FileNotFoundError) as error:
+        raise MpvIpcStale(f"mpv IPC has no listener: {error}") from error
+    except (OSError, TimeoutError) as error:
+        raise MpvIpcError(f"mpv IPC failed: {error}") from error
+    return results
+
+
+def remove_stale_mpv_socket(socket_path: Path) -> None:
+    if not socket_path.exists() and not socket_path.is_symlink():
+        return
+    try:
+        metadata = socket_path.lstat()
+        if not stat.S_ISSOCK(metadata.st_mode) or metadata.st_uid != os.getuid():
+            raise MpvIpcError("refusing to replace an unexpected mpv IPC path")
+        socket_path.unlink()
+    except OSError as error:
+        raise MpvIpcError(f"could not remove stale mpv IPC socket: {error}") from error
+
+
+def load_mpv_playlist(socket_path: Path, playlist: Path, selected_index: int) -> None:
+    version, = mpv_ipc_exchange(socket_path, [
+        ["get_property", "mpv-version"],
+    ])
+    if not isinstance(version, str) or not version:
+        raise MpvIpcError("the IPC endpoint did not identify itself as mpv")
+    mpv_ipc_exchange(socket_path, [
+        ["loadlist", str(playlist), "replace"],
+        ["playlist-play-index", selected_index],
+    ])
+
+
+def stop_spawned_process(process: subprocess.Popen) -> None:
+    if process.poll() is not None:
+        return
+    try:
+        process.terminate()
+        process.wait(timeout=1)
+    except (OSError, subprocess.TimeoutExpired):
+        try:
+            process.kill()
+        except OSError:
+            pass
+
+
+def launch_with_mpv(mpv: str, playlist: Path, selected_index: int) -> tuple[bool, bool, str]:
+    """Reuse one private idle mpv, starting it only when no live IPC session exists."""
+    directory = runtime_directory()
+    socket_path = directory / "mpv.sock"
+    lock_path = directory / "mpv.lock"
+    process: subprocess.Popen | None = None
+
+    try:
+        with lock_path.open("a+b") as lock:
+            os.chmod(lock_path, 0o600)
+            fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+
+            if socket_path.exists() or socket_path.is_symlink():
+                try:
+                    load_mpv_playlist(socket_path, playlist, selected_index)
+                    return True, True, ""
+                except MpvIpcStale:
+                    remove_stale_mpv_socket(socket_path)
+                except MpvIpcError as error:
+                    return False, True, str(error)
+
+            arguments = [
+                mpv, "--no-video", "--force-window=no", "--audio-display=no",
+                "--no-terminal", "--idle=yes", f"--input-ipc-server={socket_path}",
+            ]
+            process = subprocess.Popen(
+                arguments, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL, start_new_session=True,
+            )
+
+            deadline = time.monotonic() + 3
+            last_error = "mpv did not create its IPC socket"
+            while time.monotonic() < deadline:
+                if process.poll() is not None:
+                    return False, False, "mpv exited before its IPC session became ready"
+                if socket_path.exists():
+                    try:
+                        os.chmod(socket_path, 0o600)
+                        load_mpv_playlist(socket_path, playlist, selected_index)
+                        return True, False, ""
+                    except (OSError, MpvIpcError) as error:
+                        last_error = str(error)
+                time.sleep(0.025)
+            stop_spawned_process(process)
+            return False, False, last_error
+    except (OSError, MpvIpcError) as error:
+        if process is not None:
+            stop_spawned_process(process)
+        return False, False, str(error)
+
+
+def coda_status() -> dict:
+    coda = executable("MEDIA_CONTROLS_CODA", "coda")
+    if not coda:
+        return launch_response("error", "coda", False, "Coda is not installed.")
+    try:
+        completed = subprocess.run(
+            [coda, "status", "--json"], capture_output=True, text=True,
+            check=False, timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError) as error:
+        return launch_response("error", "coda", False, f"Could not read Coda status: {error}")
+    if completed.returncode != 0:
+        detail = (completed.stderr or completed.stdout).strip()
+        return launch_response(
+            "error", "coda", False,
+            f"Coda status was unavailable{': ' + detail if detail else '.'}",
+        )
+    try:
+        status = json.loads(completed.stdout)
+    except json.JSONDecodeError:
+        return launch_response("error", "coda", False, "Coda returned invalid status data.")
+    try:
+        version = int(status.get("version", 0)) if isinstance(status, dict) else 0
+    except (TypeError, ValueError):
+        version = 0
+    if version < 1:
+        return launch_response("error", "coda", False, "Coda returned unsupported status data.")
+    return {
+        "status": "accepted",
+        "backend": "coda",
+        "expectsMpris": True,
+        "message": "",
+        "coda": status,
+    }
+
+
+def show_coda() -> dict:
+    coda = executable("MEDIA_CONTROLS_CODA", "coda")
+    if not coda:
+        return launch_response("error", "coda", False, "Coda is not installed.")
+    try:
+        completed = subprocess.run(
+            [coda, "show"], capture_output=True, text=True, check=False, timeout=8,
+        )
+    except (OSError, subprocess.SubprocessError) as error:
+        return launch_response("error", "coda", False, f"Could not open Coda: {error}")
+    if completed.returncode != 0:
+        detail = (completed.stderr or completed.stdout).strip()
+        return launch_response(
+            "error", "coda", False,
+            f"Coda could not be opened{': ' + detail if detail else '.'}",
+        )
+    return launch_response("accepted", "coda", True, "Coda opened.")
+
+
+def launch(
+    root: Path,
+    target: Path,
+    tracks: list[Path],
+    selected_index: int,
+    kind: str,
+    coda_mode: str,
+    coda_active: bool,
+) -> dict:
+    failures: list[str] = []
+    coda = executable("MEDIA_CONTROLS_CODA", "coda")
+    use_coda = coda is not None and (
+        coda_mode == "prefer" or (coda_mode == "auto" and coda_active)
+    )
+    if use_coda:
+        context = "siblings" if kind == "file" else "recursive"
+        try:
+            completed = subprocess.run(
+                [coda, "play", "--mode=replace", f"--context={context}", "--no-raise", "--", str(target)],
+                capture_output=True, text=True, check=False, timeout=12,
+            )
+            if completed.returncode == 0:
+                return launch_response("accepted", "coda", True, "Starting in Coda…")
+            detail = (completed.stderr or completed.stdout).strip()
+            failures.append(f"Coda rejected the request{': ' + detail if detail else ''}")
+        except (OSError, subprocess.SubprocessError) as error:
+            failures.append(f"Coda could not be started: {error}")
+
+    mpv = executable("MEDIA_CONTROLS_MPV", "mpv")
+    if mpv:
+        try:
+            playlist = write_playlist(root, target, kind, tracks)
+            started, reused, error = launch_with_mpv(mpv, playlist, selected_index)
+            if started:
+                return launch_response(
+                    "accepted", "mpv", False,
+                    ("Loaded in the existing mpv session. " if reused
+                     else "Started one reusable mpv session. ")
+                    + "Media controls depend on an installed mpv MPRIS plugin.",
+                )
+            failures.append(f"mpv could not accept playback{': ' + error if error else ''}")
+        except OSError as error:
+            failures.append(f"Could not prepare the mpv playlist: {error}")
+
+    opener = executable("MEDIA_CONTROLS_XDG_OPEN", "xdg-open")
+    if opener and spawn_best_effort([opener, str(target)]):
+        message = ("Opened the folder in the file manager." if kind == "folder" else
+                   "Opened the file with the desktop default. Media controls are not guaranteed.")
+        return launch_response("accepted", "xdg-open", False, message)
+    failures.append("xdg-open is unavailable or failed")
+    return launch_response("error", "xdg-open", False, "; ".join(failures))
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Safely launch music from the Omarchy media browser")
+    parser.add_argument("--resolve-root", action="store_true")
+    parser.add_argument("--validate-only", action="store_true")
+    parser.add_argument("--coda-status", action="store_true")
+    parser.add_argument("--show-coda", action="store_true")
+    parser.add_argument("--coda-mode", choices=("off", "auto", "prefer"), default="auto")
+    parser.add_argument("--coda-active", action="store_true")
+    parser.add_argument("--root")
+    parser.add_argument("--target")
+    parser.add_argument("--kind", choices=("file", "folder"))
+    args = parser.parse_args()
+
+    if args.resolve_root:
+        detected = capabilities()
+        try:
+            root = resolve_music_root()
+            return emit({
+                "status": "accepted", "root": str(root), "message": "", **detected,
+            })
+        except LaunchError as error:
+            return emit({
+                "status": "error", "root": "", "message": str(error), **detected,
+            }, 1)
+
+    if args.coda_status:
+        result = coda_status()
+        return emit(result, 0 if result["status"] == "accepted" else 1)
+
+    if args.show_coda:
+        result = show_coda()
+        return emit(result, 0 if result["status"] == "accepted" else 1)
+
+    if not args.root or not args.target or not args.kind:
+        return emit(launch_response("error", "xdg-open", False, "root, target, and kind are required"), 2)
+    try:
+        root, target, tracks, selected_index = validate_target(args.root, args.target, args.kind)
+    except (LaunchError, OSError) as error:
+        return emit(launch_response("error", "xdg-open", False, str(error)), 1)
+    if args.validate_only:
+        return emit({"status": "accepted", "target": str(target), "message": ""})
+    result = launch(
+        root, target, tracks, selected_index, args.kind, args.coda_mode, args.coda_active
+    )
+    return emit(result, 0 if result["status"] == "accepted" else 1)
+
+
+if __name__ == "__main__":
+    sys.exit(main())
