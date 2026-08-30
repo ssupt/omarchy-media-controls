@@ -59,7 +59,7 @@ Item {
 
   function integrationLabel(mode) {
     var value = String(mode || "auto").toUpperCase()
-    return value === "OFF" ? "GENERIC" : "CODA " + value
+    return value === "OFF" ? "GENERIC" : "TOCCATA " + value
   }
 
   FontLoader {

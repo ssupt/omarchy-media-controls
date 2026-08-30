@@ -15,7 +15,7 @@ function booleanValue(value, fallback) {
   return !!fallback
 }
 
-function codaIntegrationMode(value) {
+function toccataIntegrationMode(value) {
   var mode = textValue(value).toLowerCase()
   return mode === "off" || mode === "prefer" ? mode : "auto"
 }
@@ -248,7 +248,7 @@ if (typeof module !== "undefined") {
   module.exports = {
     textValue: textValue,
     booleanValue: booleanValue,
-    codaIntegrationMode: codaIntegrationMode,
+    toccataIntegrationMode: toccataIntegrationMode,
     metadataText: metadataText,
     durationSeconds: durationSeconds,
     formatDuration: formatDuration,

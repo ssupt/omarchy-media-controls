@@ -66,11 +66,11 @@ assert.equal(model.fileUrlToPath('file:///Music/Bj%C3%B6rk%20%231'), '/Music/Bj�
 assert.equal(model.booleanValue('off', true), false)
 assert.equal(model.booleanValue('yes', false), true)
 assert.equal(model.booleanValue('invalid', true), true)
-assert.equal(model.codaIntegrationMode('off'), 'off')
-assert.equal(model.codaIntegrationMode('prefer'), 'prefer')
-assert.equal(model.codaIntegrationMode('unexpected'), 'auto')
-assert.deepEqual(model.parseHelperResponse('{"status":"accepted","backend":"coda"}'), {
-  status: 'accepted', backend: 'coda'
+assert.equal(model.toccataIntegrationMode('off'), 'off')
+assert.equal(model.toccataIntegrationMode('prefer'), 'prefer')
+assert.equal(model.toccataIntegrationMode('unexpected'), 'auto')
+assert.deepEqual(model.parseHelperResponse('{"status":"accepted","backend":"toccata"}'), {
+  status: 'accepted', backend: 'toccata'
 })
 assert.equal(model.parseHelperResponse('broken').status, 'error')
 
@@ -84,7 +84,7 @@ assert.equal(model.trackSignature(stream), model.trackSignature(streamLater))
 assert.notEqual(model.trackSignature(stream), model.trackSignature({ ...stream, uniqueId: 8 }))
 
 const nativePlaying = {
-  dbusName: 'org.mpris.MediaPlayer2.coda', identity: 'Coda',
+  dbusName: 'org.mpris.MediaPlayer2.toccata', identity: 'Toccata',
   trackTitle: 'Local song', isPlaying: true
 }
 const proxyPlaying = {
@@ -110,7 +110,7 @@ assert.match(barSource, /horizontalLayout/)
 assert.match(barSource, /verticalLayout/)
 assert.match(barSource, /root\.openDetails\(\)/)
 assert.match(barSource, /visible: hasMedia \|\| showWhenIdle/)
-assert.match(barSource, /root\.setting\("codaIntegration", "auto"\)/)
+assert.match(barSource, /root\.setting\("toccataIntegration", "auto"\)/)
 assert.match(barSource, /text: "ARCHIVE"/)
 assert.match(barSource, /PlayerWindow/)
 assert.doesNotMatch(barSource, /KeyboardPanel/)
@@ -122,7 +122,7 @@ assert.match(playerSource, /owner: root/)
 assert.match(playerSource, /MusicBrowser/)
 assert.match(playerSource, /MonumentSectionHeader/)
 assert.match(playerSource, /title: "Transmission chamber"/)
-assert.match(playerSource, /controlsService\.requestCodaStatus\(\)/)
+assert.match(playerSource, /controlsService\.requestToccataStatus\(\)/)
 assert.match(playerSource, /integrationMode !== "off"/)
 assert.match(playerSource, /Accessible\.name: "Browse music archive"/)
 assert.match(playerSource, /root\.controller\.lyricsDisplayText\(\)/)
@@ -145,12 +145,12 @@ assert.match(serviceSource, /readonly property var players: Mpris\.players/)
 assert.match(serviceSource, /activePlayer\.lengthSupported/)
 assert.match(serviceSource, /interval: 8000/)
 assert.match(serviceSource, /resumePausedPlayer\(\)/)
-assert.match(serviceSource, /codaSignatureBeforeLaunch/)
+assert.match(serviceSource, /toccataSignatureBeforeLaunch/)
 assert.match(serviceSource, /handoffSucceeded\(\)/)
-assert.match(serviceSource, /property string launchCodaMode: "auto"/)
-assert.match(serviceSource, /function requestCodaStatus\(\)/)
-assert.match(serviceSource, /!codaInstalled \|\| !activeIsCoda/)
-assert.match(serviceSource, /"--coda-mode", launchCodaMode/)
+assert.match(serviceSource, /property string launchToccataMode: "auto"/)
+assert.match(serviceSource, /function requestToccataStatus\(\)/)
+assert.match(serviceSource, /!toccataInstalled \|\| !activeIsToccata/)
+assert.match(serviceSource, /"--toccata-mode", launchToccataMode/)
 assert.match(serviceSource, /target: "media"/)
 console.log('PASS: media model and UI contract')
 JS
@@ -305,7 +305,7 @@ with tempfile.TemporaryDirectory(prefix="media-controls-test-") as temporary:
     assert completed.returncode == 0
     assert payload["status"] == "accepted" and payload["root"] == str(music.resolve())
     assert all(isinstance(payload[key], bool) for key in (
-        "codaInstalled", "mpvInstalled", "xdgOpenInstalled"
+        "toccataInstalled", "mpvInstalled", "xdgOpenInstalled"
     ))
 
     fake_xdg = executable(
@@ -335,7 +335,7 @@ with tempfile.TemporaryDirectory(prefix="media-controls-test-") as temporary:
     _, payload = invoke(["--resolve-root"], missing_environment)
     assert payload["status"] == "error"
     assert all(isinstance(payload[key], bool) for key in (
-        "codaInstalled", "mpvInstalled", "xdgOpenInstalled"
+        "toccataInstalled", "mpvInstalled", "xdgOpenInstalled"
     ))
     assert not (missing_home / "Music").exists()
 
@@ -372,8 +372,8 @@ with tempfile.TemporaryDirectory(prefix="media-controls-test-") as temporary:
     mpv_start_log = sandbox / "mpv-starts.jsonl"
     mpv_command_log = sandbox / "mpv-commands.jsonl"
     mpv_error_log = sandbox / "mpv-error.txt"
-    coda = executable(
-        sandbox / "coda",
+    toccata = executable(
+        sandbox / "toccata",
         "import json, os, sys\n"
         "arguments = sys.argv[1:]\n"
         "open(os.environ['TEST_ARGUMENT_LOG'], 'w', encoding='utf-8').write(json.dumps(arguments))\n"
@@ -381,7 +381,7 @@ with tempfile.TemporaryDirectory(prefix="media-controls-test-") as temporary:
         "    print(json.dumps({'version': 1, 'direct': True, 'queueLength': 3, "
         "'currentIndex': 1, 'signal': '24-bit / 96 kHz'}))\n"
         "    raise SystemExit(0)\n"
-        "raise SystemExit(int(os.environ.get('TEST_CODA_EXIT', '0')))\n",
+        "raise SystemExit(int(os.environ.get('TEST_TOCCATA_EXIT', '0')))\n",
     )
     mpv = executable(
         sandbox / "mpv",
@@ -443,7 +443,7 @@ with tempfile.TemporaryDirectory(prefix="media-controls-test-") as temporary:
     )
     launch_environment = environment.copy()
     launch_environment.update({
-        "MEDIA_CONTROLS_CODA": str(coda),
+        "MEDIA_CONTROLS_TOCCATA": str(toccata),
         "MEDIA_CONTROLS_MPV": str(mpv),
         "MEDIA_CONTROLS_XDG_OPEN": str(opener),
         "TEST_ARGUMENT_LOG": str(log),
@@ -489,42 +489,42 @@ with tempfile.TemporaryDirectory(prefix="media-controls-test-") as temporary:
     assert Path(repeat_commands[1][1]) == first_playlist_path
     assert repeat_commands[2] == ["playlist-play-index", 1]
 
-    completed, payload = invoke(["--coda-active", *common], launch_environment)
+    completed, payload = invoke(["--toccata-active", *common], launch_environment)
     assert completed.returncode == 0
     assert payload == {
-        "status": "accepted", "backend": "coda", "expectsMpris": True,
-        "message": "Starting in Coda…",
+        "status": "accepted", "backend": "toccata", "expectsMpris": True,
+        "message": "Starting in Toccata…",
     }
     assert json.loads(log.read_text(encoding="utf-8")) == [
         "play", "--mode=replace", "--context=siblings", "--no-raise", "--", str(selected.resolve())
     ]
 
-    completed, payload = invoke(["--coda-mode", "prefer", *common], launch_environment)
-    assert completed.returncode == 0 and payload["backend"] == "coda"
+    completed, payload = invoke(["--toccata-mode", "prefer", *common], launch_environment)
+    assert completed.returncode == 0 and payload["backend"] == "toccata"
 
     completed, payload = invoke([
-        "--coda-mode", "off", "--coda-active", *common
+        "--toccata-mode", "off", "--toccata-active", *common
     ], launch_environment)
     assert completed.returncode == 0 and payload["backend"] == "mpv"
     assert len(json_lines(mpv_start_log)) == 1
     assert json_lines(mpv_command_log)[-1] == ["playlist-play-index", 1]
 
-    completed, payload = invoke(["--coda-status"], launch_environment)
+    completed, payload = invoke(["--toccata-status"], launch_environment)
     assert completed.returncode == 0
-    assert payload["status"] == "accepted" and payload["backend"] == "coda"
-    assert payload["coda"] == {
+    assert payload["status"] == "accepted" and payload["backend"] == "toccata"
+    assert payload["toccata"] == {
         "version": 1, "direct": True, "queueLength": 3,
         "currentIndex": 1, "signal": "24-bit / 96 kHz",
     }
     assert json.loads(log.read_text(encoding="utf-8")) == ["status", "--json"]
 
-    completed, payload = invoke(["--show-coda"], launch_environment)
+    completed, payload = invoke(["--show-toccata"], launch_environment)
     assert completed.returncode == 0
-    assert payload["status"] == "accepted" and payload["backend"] == "coda"
+    assert payload["status"] == "accepted" and payload["backend"] == "toccata"
     assert json.loads(log.read_text(encoding="utf-8")) == ["show"]
 
-    launch_environment["TEST_CODA_EXIT"] = "3"
-    completed, payload = invoke(["--coda-mode", "prefer", *common], launch_environment)
+    launch_environment["TEST_TOCCATA_EXIT"] = "3"
+    completed, payload = invoke(["--toccata-mode", "prefer", *common], launch_environment)
     assert completed.returncode == 0 and payload["backend"] == "mpv"
     assert payload["expectsMpris"] is False
 
@@ -544,7 +544,7 @@ with tempfile.TemporaryDirectory(prefix="media-controls-test-") as temporary:
     assert all(".private" not in line and "Linked" not in line for line in recursive_lines)
 
     opener_environment = launch_environment.copy()
-    opener_environment["MEDIA_CONTROLS_CODA"] = str(sandbox / "missing-coda")
+    opener_environment["MEDIA_CONTROLS_TOCCATA"] = str(sandbox / "missing-toccata")
     opener_environment["MEDIA_CONTROLS_MPV"] = str(sandbox / "missing-mpv")
     _, payload = invoke(folder_arguments, opener_environment)
     assert payload["backend"] == "xdg-open" and payload["expectsMpris"] is False
@@ -565,7 +565,7 @@ PY
 jq -e '
   .schemaVersion == 1
   and .id == "ssupt.media-controls"
-  and .version == "0.3.0"
+  and .version == "0.4.0"
   and .author == "ssupt"
   and .kinds == ["service", "bar-widget"]
   and (.kinds | index("panel") == null)

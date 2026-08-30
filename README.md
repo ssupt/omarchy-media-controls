@@ -1,7 +1,7 @@
 # Media Controls for Omarchy
 
 Media Controls turns Omarchy's media widget into a local archive browser and a
-compact now-playing rail. Its popup follows Coda's Monumental interface
+compact now-playing rail. Its popup follows Toccata's Monumental interface
 language: square one-pixel rules, numbered sections, restrained state color,
 and distinct machine/archive typography. When nothing is playing, the widget
 remains visible as **ARCHIVE** so the local collection is always one click away.
@@ -19,14 +19,14 @@ supported audio files, and sorts names naturally. It never creates a missing
 Music folder. The root is resolved from `MEDIA_CONTROLS_MUSIC_DIR`, then
 `xdg-user-dir MUSIC`, then `$HOME/Music`.
 
-Coda is optional. The default `auto` mode uses its public CLI only when Coda is
-already the connected MPRIS player; it never starts Coda just because the
-binary is installed. `prefer` allows a browser selection to start Coda, while
-`off` never invokes it. The popup can show Coda's public status data—queue
-position, direct-output state, and signal format—when Coda is active. No Coda
+Toccata is optional. The default `auto` mode uses its public CLI only when Toccata is
+already the connected MPRIS player; it never starts Toccata just because the
+binary is installed. `prefer` allows a browser selection to start Toccata, while
+`off` never invokes it. The popup can show Toccata's public status data—queue
+position, direct-output state, and signal format—when Toccata is active. No Toccata
 database or private files are read.
 
-When a selection is not routed to Coda, the plugin tries one reusable,
+When a selection is not routed to Toccata, the plugin tries one reusable,
 audio-only mpv session and then `xdg-open`. Later selections replace that mpv
 session's playlist through a private Unix socket instead of starting another
 player process; the session remains idle and reusable between selections. Those
@@ -34,21 +34,21 @@ fallbacks cannot guarantee MPRIS controls, and the browser reports that
 explicitly. Once a player appears, transport control stays on the standard
 MPRIS interface in every mode.
 
-## Optional Coda settings
+## Optional Toccata settings
 
 Settings live beside the widget entry in `~/.config/omarchy/shell.json`:
 
 ```json
 {
   "id": "ssupt.media-controls",
-  "codaIntegration": "auto",
-  "showCodaDetails": true,
+  "toccataIntegration": "auto",
+  "showToccataDetails": true,
   "showWhenIdle": true
 }
 ```
 
-`codaIntegration` accepts `off`, `auto`, or `prefer`. `showCodaDetails` controls
-the Coda-only diagnostic strip in the Transmission view whenever integration is
+`toccataIntegration` accepts `off`, `auto`, or `prefer`. `showToccataDetails` controls
+the Toccata-only diagnostic strip in the Transmission view whenever integration is
 enabled. Set `showWhenIdle` to `false` if the ARCHIVE entry should disappear
 when no player is available.
 
@@ -104,10 +104,10 @@ media plugin is disabled as part of that replacement.
 - Python 3
 - `ffmpeg`/`ffprobe` for local embedded lyrics and artwork
 - Network access for the optional LRCLIB fallback
-- Optional: Coda for deterministic queueing, public playback diagnostics, and
+- Optional: Toccata for deterministic queueing, public playback diagnostics, and
   MPRIS handoff; or mpv as the first playback fallback
 
-Python and FFmpeg are included in a standard Omarchy installation; Coda and
+Python and FFmpeg are included in a standard Omarchy installation; Toccata and
 mpv remain optional.
 
 ## Updating

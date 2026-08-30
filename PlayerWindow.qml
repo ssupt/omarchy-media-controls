@@ -12,11 +12,11 @@ KeyboardPanel {
   required property var controller
   property var controlsService: null
   property string integrationMode: "auto"
-  property bool showCodaDetails: true
+  property bool showToccataDetails: true
   property bool requestedOpen: false
   property bool browserVisible: false
-  readonly property bool codaDetailsEnabled: showCodaDetails
-    && integrationMode !== "off" && !!controlsService && controlsService.codaInstalled
+  readonly property bool toccataDetailsEnabled: showToccataDetails
+    && integrationMode !== "off" && !!controlsService && controlsService.toccataInstalled
 
   signal closeRequested()
   signal browserRequested()
@@ -41,22 +41,22 @@ KeyboardPanel {
     if (flick && flick.contentY !== undefined) flick.contentY = 0
   }
 
-  function codaQueueText() {
-    if (controlsService && controlsService.codaStatusState === "loading")
+  function toccataQueueText() {
+    if (controlsService && controlsService.toccataStatusState === "loading")
       return "READING SESSION"
-    if (controlsService && controlsService.codaStatusState === "error")
+    if (controlsService && controlsService.toccataStatusState === "error")
       return "STATUS UNAVAILABLE"
-    var status = controlsService ? controlsService.codaStatus : null
+    var status = controlsService ? controlsService.toccataStatus : null
     if (!status || !status.queueLength) return "SEQUENCE AVAILABLE"
     var index = Math.max(0, Number(status.currentIndex || 0)) + 1
     return "RECORD " + monument.serial(index, 2) + " / "
       + monument.serial(Number(status.queueLength), 2)
   }
 
-  function codaSignalText() {
-    if (controlsService && controlsService.codaStatusMessage !== "")
-      return controlsService.codaStatusMessage.toUpperCase()
-    var status = controlsService ? controlsService.codaStatus : null
+  function toccataSignalText() {
+    if (controlsService && controlsService.toccataStatusMessage !== "")
+      return controlsService.toccataStatusMessage.toUpperCase()
+    var status = controlsService ? controlsService.toccataStatus : null
     if (!status) return "SESSION BUS ONLINE"
     var signal = String(status.signal || status.format || "")
     return signal !== "" ? signal.toUpperCase() : "SESSION BUS ONLINE"
@@ -71,8 +71,8 @@ KeyboardPanel {
       keyScope.forceActiveFocus()
       if (controlsService) {
         controlsService.requestLyrics(false)
-        if (codaDetailsEnabled && controlsService.activeIsCoda)
-          controlsService.requestCodaStatus()
+        if (toccataDetailsEnabled && controlsService.activeIsToccata)
+          controlsService.requestToccataStatus()
       }
     }
   }
@@ -105,7 +105,7 @@ KeyboardPanel {
           keyScope.forceActiveFocus()
           if (root.controlsService) {
             root.controlsService.requestLyrics(false)
-            if (root.codaDetailsEnabled) root.controlsService.requestCodaStatus()
+            if (root.toccataDetailsEnabled) root.controlsService.requestToccataStatus()
           }
         })
       }
@@ -115,9 +115,9 @@ KeyboardPanel {
       interval: 2000
       repeat: true
       triggeredOnStart: true
-      running: root.open && !root.browserVisible && root.codaDetailsEnabled
-        && root.controlsService && root.controlsService.activeIsCoda
-      onTriggered: root.controlsService.requestCodaStatus()
+      running: root.open && !root.browserVisible && root.toccataDetailsEnabled
+        && root.controlsService && root.controlsService.activeIsToccata
+      onTriggered: root.controlsService.requestToccataStatus()
     }
 
     MonumentStyle {
@@ -282,8 +282,8 @@ KeyboardPanel {
         Rectangle {
           Layout.fillWidth: true
           implicitHeight: 42
-          visible: root.codaDetailsEnabled && root.controlsService
-            && root.controlsService.activeIsCoda
+          visible: root.toccataDetailsEnabled && root.controlsService
+            && root.controlsService.activeIsToccata
           color: monument.field
           border.width: 1
           border.color: monument.ruleStrong
@@ -297,7 +297,7 @@ KeyboardPanel {
             Rectangle {
               Layout.preferredWidth: 7
               Layout.preferredHeight: 7
-              color: root.controlsService && root.controlsService.codaStatus.direct
+              color: root.controlsService && root.controlsService.toccataStatus.direct
                 ? monument.alive : monument.warning
               border.width: 1
               border.color: monument.voidColor
@@ -309,9 +309,9 @@ KeyboardPanel {
 
               Text {
                 Layout.fillWidth: true
-                text: "CODA LINK / " + (root.controlsService
-                  && root.controlsService.codaStatus.direct ? "DIRECT" : "CONNECTED")
-                color: root.controlsService && root.controlsService.codaStatus.direct
+                text: "TOCCATA LINK / " + (root.controlsService
+                  && root.controlsService.toccataStatus.direct ? "DIRECT" : "CONNECTED")
+                color: root.controlsService && root.controlsService.toccataStatus.direct
                   ? monument.alive : monument.warning
                 font.family: monument.machineFont
                 font.pixelSize: 10
@@ -322,7 +322,7 @@ KeyboardPanel {
 
               Text {
                 Layout.fillWidth: true
-                text: root.codaQueueText() + " // " + root.codaSignalText()
+                text: root.toccataQueueText() + " // " + root.toccataSignalText()
                 color: monument.inkMuted
                 font.family: monument.machineFont
                 font.pixelSize: 9
@@ -335,9 +335,9 @@ KeyboardPanel {
               monument: monument
               compact: true
               code: "↗"
-              text: "Coda"
-              Accessible.name: "Open Coda"
-              onClicked: if (root.controlsService) root.controlsService.showCoda()
+              text: "Toccata"
+              Accessible.name: "Open Toccata"
+              onClicked: if (root.controlsService) root.controlsService.showToccata()
             }
           }
         }

@@ -40,23 +40,23 @@ Item {
 
   property string musicRoot: ""
   property string musicRootMessage: "Resolving the Music folder…"
-  property bool codaInstalled: false
-  readonly property bool codaConnected: codaPlayer() !== null
-  readonly property bool activeIsCoda: isCodaPlayer(activePlayer)
-  property var codaStatus: ({})
-  property string codaStatusState: "idle"
-  property string codaStatusMessage: ""
-  property bool codaStatusHandled: false
-  property bool codaShowHandled: false
+  property bool toccataInstalled: false
+  readonly property bool toccataConnected: toccataPlayer() !== null
+  readonly property bool activeIsToccata: isToccataPlayer(activePlayer)
+  property var toccataStatus: ({})
+  property string toccataStatusState: "idle"
+  property string toccataStatusMessage: ""
+  property bool toccataStatusHandled: false
+  property bool toccataShowHandled: false
   property string launchState: "idle"
   property string launchBackend: ""
   property string launchMessage: ""
   property string launchTarget: ""
   property string launchKind: ""
-  property string launchCodaMode: "auto"
+  property string launchToccataMode: "auto"
   property string pausedPlayerKey: ""
   property bool pausedPlayerWasPlaying: false
-  property string codaSignatureBeforeLaunch: ""
+  property string toccataSignatureBeforeLaunch: ""
   property bool validateHandled: false
   property bool launchHandled: false
 
@@ -75,17 +75,17 @@ Item {
     rootProc.running = true
   }
 
-  function isCodaPlayer(player) {
+  function isToccataPlayer(player) {
     if (!player) return false
     var key = playerKey(player).toLowerCase()
-    return key === "org.mpris.mediaplayer2.coda"
-      || key.indexOf("org.mpris.mediaplayer2.coda.") === 0
-      || String(player.desktopEntry || "").toLowerCase() === "io.github.ssupt.coda"
+    return key === "org.mpris.mediaplayer2.toccata"
+      || key.indexOf("org.mpris.mediaplayer2.toccata.") === 0
+      || String(player.desktopEntry || "").toLowerCase() === "io.github.ssupt.toccata"
   }
 
-  function codaPlayer() {
+  function toccataPlayer() {
     for (var i = 0; i < players.length; i++) {
-      if (isCodaPlayer(players[i])) return players[i]
+      if (isToccataPlayer(players[i])) return players[i]
     }
     return null
   }
@@ -113,7 +113,7 @@ Item {
     pausedPlayerWasPlaying = false
   }
 
-  function launchPath(target, kind, codaMode) {
+  function launchPath(target, kind, toccataMode) {
     if (musicRoot === "") {
       launchState = "error"
       launchMessage = musicRootMessage || "The Music folder is unavailable."
@@ -124,7 +124,7 @@ Item {
       return false
     launchTarget = String(target || "")
     launchKind = String(kind || "")
-    launchCodaMode = Model.codaIntegrationMode(codaMode)
+    launchToccataMode = Model.toccataIntegrationMode(toccataMode)
     launchBackend = ""
     launchMessage = "Checking the selection…"
     launchState = "validating"
@@ -137,15 +137,15 @@ Item {
   }
 
   function beginValidatedLaunch() {
-    codaSignatureBeforeLaunch = Model.trackSignature(codaPlayer())
+    toccataSignatureBeforeLaunch = Model.trackSignature(toccataPlayer())
     pauseForHandoff()
     launchState = "launching"
     launchMessage = "Starting playback…"
     launchHandled = false
     var command = [pluginScript("media-launch"), "--root", musicRoot,
       "--target", launchTarget, "--kind", launchKind,
-      "--coda-mode", launchCodaMode]
-    if (launchCodaMode === "auto" && codaConnected) command.push("--coda-active")
+      "--toccata-mode", launchToccataMode]
+    if (launchToccataMode === "auto" && toccataConnected) command.push("--toccata-active")
     launchProc.command = command
     launchProc.running = true
     launchResultChanged()
@@ -164,82 +164,82 @@ Item {
     }
     launchBackend = String(payload.backend || "")
     launchMessage = String(payload.message || "Playback request accepted.")
-    if (payload.expectsMpris && launchBackend === "coda") {
+    if (payload.expectsMpris && launchBackend === "toccata") {
       launchState = "waiting"
       handoffTimeout.restart()
-      codaPoll.start()
-      tryCodaHandoff()
+      toccataPoll.start()
+      tryToccataHandoff()
     } else {
       pausedPlayerKey = ""
       pausedPlayerWasPlaying = false
-      codaSignatureBeforeLaunch = ""
+      toccataSignatureBeforeLaunch = ""
       launchState = "success"
       launchResultChanged()
     }
   }
 
-  function tryCodaHandoff() {
+  function tryToccataHandoff() {
     if (launchState !== "waiting") return false
-    var player = codaPlayer()
+    var player = toccataPlayer()
     if (!player || !hasTrackMetadata(player)) return false
     var metadataUrl = Model.metadataText(player.metadata || {}, "xesam:url")
     var targetMatches = metadataUrl.indexOf("file:") === 0
       && Model.fileUrlToPath(metadataUrl) === launchTarget
-    if (Model.trackSignature(player) === codaSignatureBeforeLaunch && !targetMatches)
+    if (Model.trackSignature(player) === toccataSignatureBeforeLaunch && !targetMatches)
       return false
     preferredPlayerKey = playerKey(player)
     pausedPlayerKey = ""
     pausedPlayerWasPlaying = false
-    codaSignatureBeforeLaunch = ""
+    toccataSignatureBeforeLaunch = ""
     launchState = "success"
-    launchBackend = "coda"
-    launchMessage = "Now playing with Coda."
+    launchBackend = "toccata"
+    launchMessage = "Now playing with Toccata."
     handoffTimeout.stop()
-    codaPoll.stop()
+    toccataPoll.stop()
     launchResultChanged()
     handoffSucceeded()
     return true
   }
 
-  function requestCodaStatus() {
-    if (!codaInstalled || !activeIsCoda || codaStatusProc.running) return false
-    codaStatusHandled = false
-    codaStatusState = "loading"
-    codaStatusMessage = ""
-    codaStatusProc.command = [pluginScript("media-launch"), "--coda-status"]
-    codaStatusProc.running = true
+  function requestToccataStatus() {
+    if (!toccataInstalled || !activeIsToccata || toccataStatusProc.running) return false
+    toccataStatusHandled = false
+    toccataStatusState = "loading"
+    toccataStatusMessage = ""
+    toccataStatusProc.command = [pluginScript("media-launch"), "--toccata-status"]
+    toccataStatusProc.running = true
     return true
   }
 
-  function handleCodaStatusResponse(payload) {
-    if (codaStatusHandled) return
-    codaStatusHandled = true
-    if (payload.status === "accepted" && payload.coda) {
-      codaStatus = payload.coda
-      codaStatusState = "ready"
-      codaStatusMessage = ""
+  function handleToccataStatusResponse(payload) {
+    if (toccataStatusHandled) return
+    toccataStatusHandled = true
+    if (payload.status === "accepted" && payload.toccata) {
+      toccataStatus = payload.toccata
+      toccataStatusState = "ready"
+      toccataStatusMessage = ""
     } else {
-      codaStatus = ({})
-      codaStatusState = "error"
-      codaStatusMessage = String(payload.message || "Coda status is unavailable.")
+      toccataStatus = ({})
+      toccataStatusState = "error"
+      toccataStatusMessage = String(payload.message || "Toccata status is unavailable.")
     }
   }
 
-  function showCoda() {
-    if (!codaInstalled || codaShowProc.running) return false
-    codaShowHandled = false
-    codaShowProc.command = [pluginScript("media-launch"), "--show-coda"]
-    codaShowProc.running = true
+  function showToccata() {
+    if (!toccataInstalled || toccataShowProc.running) return false
+    toccataShowHandled = false
+    toccataShowProc.command = [pluginScript("media-launch"), "--show-toccata"]
+    toccataShowProc.running = true
     return true
   }
 
-  function handleCodaShowResponse(payload) {
-    if (codaShowHandled) return
-    codaShowHandled = true
+  function handleToccataShowResponse(payload) {
+    if (toccataShowHandled) return
+    toccataShowHandled = true
     if (payload.status === "accepted") {
-      codaInstalled = true
-      codaStatusMessage = ""
-    } else codaStatusMessage = String(payload.message || "Coda could not be opened.")
+      toccataInstalled = true
+      toccataStatusMessage = ""
+    } else toccataStatusMessage = String(payload.message || "Toccata could not be opened.")
   }
 
   function isProxyPlayer(player) {
@@ -418,13 +418,13 @@ Item {
   }
 
   onTrackSignatureChanged: refreshTrack()
-  onActiveIsCodaChanged: {
-    if (!activeIsCoda) {
-      if (codaStatusProc.running) codaStatusProc.running = false
-      codaStatusHandled = true
-      codaStatus = ({})
-      codaStatusState = "idle"
-      codaStatusMessage = ""
+  onActiveIsToccataChanged: {
+    if (!activeIsToccata) {
+      if (toccataStatusProc.running) toccataStatusProc.running = false
+      toccataStatusHandled = true
+      toccataStatus = ({})
+      toccataStatusState = "idle"
+      toccataStatusMessage = ""
     }
   }
   onPrimaryArtUrlChanged: {
@@ -446,19 +446,19 @@ Item {
     repeat: false
     onTriggered: {
       if (root.launchState !== "waiting") return
-      codaPoll.stop()
+      toccataPoll.stop()
       root.resumePausedPlayer()
       root.launchState = "error"
-      root.launchMessage = "Coda did not expose playable media within eight seconds. The previous player was resumed."
+      root.launchMessage = "Toccata did not expose playable media within eight seconds. The previous player was resumed."
       root.launchResultChanged()
     }
   }
 
   Timer {
-    id: codaPoll
+    id: toccataPoll
     interval: 100
     repeat: true
-    onTriggered: root.tryCodaHandoff()
+    onTriggered: root.tryToccataHandoff()
   }
 
   Timer {
@@ -514,7 +514,7 @@ Item {
       waitForEnd: true
       onStreamFinished: {
         var payload = Model.parseHelperResponse(text)
-        root.codaInstalled = !!payload.codaInstalled
+        root.toccataInstalled = !!payload.toccataInstalled
         if (payload.status === "accepted" && payload.root) {
           root.musicRoot = String(payload.root)
           root.musicRootMessage = ""
@@ -569,28 +569,28 @@ Item {
   }
 
   Process {
-    id: codaStatusProc
+    id: toccataStatusProc
     stdout: StdioCollector {
       waitForEnd: true
-      onStreamFinished: root.handleCodaStatusResponse(Model.parseHelperResponse(text))
+      onStreamFinished: root.handleToccataStatusResponse(Model.parseHelperResponse(text))
     }
     onExited: function(exitCode) {
-      if (exitCode !== 0 && !root.codaStatusHandled)
-        root.handleCodaStatusResponse({ status: "error",
-          message: "Coda status could not be read." })
+      if (exitCode !== 0 && !root.toccataStatusHandled)
+        root.handleToccataStatusResponse({ status: "error",
+          message: "Toccata status could not be read." })
     }
   }
 
   Process {
-    id: codaShowProc
+    id: toccataShowProc
     stdout: StdioCollector {
       waitForEnd: true
-      onStreamFinished: root.handleCodaShowResponse(Model.parseHelperResponse(text))
+      onStreamFinished: root.handleToccataShowResponse(Model.parseHelperResponse(text))
     }
     onExited: function(exitCode) {
-      if (exitCode !== 0 && !root.codaShowHandled)
-        root.handleCodaShowResponse({ status: "error",
-          message: "Coda could not be opened." })
+      if (exitCode !== 0 && !root.toccataShowHandled)
+        root.handleToccataShowResponse({ status: "error",
+          message: "Toccata could not be opened." })
     }
   }
 

@@ -33,10 +33,10 @@ BarWidget {
   readonly property bool lyricsLoading: controlsService ? controlsService.lyricsLoading : false
   readonly property string lyricsSource: controlsService ? controlsService.lyricsSource : ""
   readonly property string lyricsMessage: controlsService ? controlsService.lyricsMessage : ""
-  readonly property string integrationMode: Model.codaIntegrationMode(
-    root.setting("codaIntegration", "auto"))
-  readonly property bool showCodaDetails: Model.booleanValue(
-    root.setting("showCodaDetails", true), true)
+  readonly property string integrationMode: Model.toccataIntegrationMode(
+    root.setting("toccataIntegration", "auto"))
+  readonly property bool showToccataDetails: Model.booleanValue(
+    root.setting("showToccataDetails", true), true)
   readonly property bool showWhenIdle: Model.booleanValue(
     root.setting("showWhenIdle", true), true)
   readonly property bool vertical: bar ? Model.isVerticalPosition(bar.position) : false
@@ -452,7 +452,7 @@ BarWidget {
     controller: root
     controlsService: root.controlsService
     integrationMode: root.integrationMode
-    showCodaDetails: root.showCodaDetails
+    showToccataDetails: root.showToccataDetails
     requestedOpen: root.opened
     onCloseRequested: root.close()
     onBrowserRequested: root.openBrowser()

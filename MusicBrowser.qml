@@ -19,8 +19,8 @@ FocusScope {
   readonly property string rootUrl: Model.pathToFileUrl(musicRoot)
   property string currentFolder: rootUrl
   readonly property bool atRoot: currentFolder === rootUrl
-  readonly property bool codaRouteActive: integrationMode !== "off"
-    && !!service && service.codaConnected
+  readonly property bool toccataRouteActive: integrationMode !== "off"
+    && !!service && service.toccataConnected
   readonly property bool busy: service && (service.launchState === "validating"
     || service.launchState === "launching" || service.launchState === "waiting")
   implicitWidth: 480
@@ -34,11 +34,11 @@ FocusScope {
   }
 
   function routeLabel() {
-    if (integrationMode === "off") return "GENERIC MPRIS / CODA DISABLED"
-    if (service && service.codaConnected) return "CODA LINK ACTIVE"
+    if (integrationMode === "off") return "GENERIC MPRIS / TOCCATA DISABLED"
+    if (service && service.toccataConnected) return "TOCCATA LINK ACTIVE"
     if (integrationMode === "prefer") {
-      return service && service.codaInstalled
-        ? "CODA PREFERRED / FALLBACK READY" : "CODA UNAVAILABLE / FALLBACK READY"
+      return service && service.toccataInstalled
+        ? "TOCCATA PREFERRED / FALLBACK READY" : "TOCCATA UNAVAILABLE / FALLBACK READY"
     }
     return "AUTO ROUTING / GENERIC FALLBACK READY"
   }
@@ -245,14 +245,14 @@ FocusScope {
       Rectangle {
         Layout.preferredWidth: 5
         Layout.preferredHeight: 5
-        color: root.codaRouteActive
+        color: root.toccataRouteActive
           ? root.monument.alive : root.monument.inkFaint
       }
 
       Text {
         Layout.fillWidth: true
         text: "OUTPUT ROUTE // " + root.routeLabel()
-        color: root.codaRouteActive
+        color: root.toccataRouteActive
           ? root.monument.alive : root.monument.inkFaint
         font.family: root.monument.machineFont
         font.pixelSize: 9
