@@ -18,6 +18,7 @@ jobs:
   test:
     name: Test and validate plugin
     runs-on: ubuntu-24.04
+    container: archlinux:base-devel
     timeout-minutes: 5
 
     steps:
@@ -38,18 +39,9 @@ jobs:
           sparse-checkout-cone-mode: false
 
       - name: Install test dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install --yes --no-install-recommends \
-            ffmpeg \
-            jq \
-            nodejs \
-            qml6-module-qt-labs-folderlistmodel \
-            qml6-module-qtquick \
-            qml6-module-qtquick-layouts \
-            qt6-declarative-dev-tools \
-            ripgrep
-          echo "/usr/lib/qt6/bin" >> "$GITHUB_PATH"
+        run: >-
+          pacman -Syu --noconfirm --needed ffmpeg jq nodejs python quickshell
+          ripgrep
 
       - name: Run test suite
         run: ./plugin/test/all
