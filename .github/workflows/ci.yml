@@ -39,9 +39,10 @@ jobs:
           sparse-checkout-cone-mode: false
 
       - name: Install test dependencies
-        run: >-
-          pacman -Syu --noconfirm --needed ffmpeg jq nodejs python quickshell
-          ripgrep
+        run: |
+          pacman -Syu --noconfirm --needed \
+            ffmpeg jq nodejs python quickshell ripgrep
+          echo "/usr/lib/qt6/bin" >> "$GITHUB_PATH"
 
       - name: Run test suite
         run: ./plugin/test/all
