@@ -150,7 +150,7 @@ def sibling_files(root: Path, selected: Path) -> list[Path]:
 
 
 def recursive_files(root: Path, selected: Path) -> list[Path]:
-    tracks: list[Path] = []
+    tracks: list[tuple[Path, Path]] = []
     for directory, names, files in os.walk(selected, topdown=True, followlinks=False):
         directory_path = Path(directory)
         readable_names: list[str] = []
@@ -171,9 +171,9 @@ def recursive_files(root: Path, selected: Path) -> list[Path]:
             except (OSError, ValueError):
                 continue
             if canonical.is_file() and supported_file(canonical) and os.access(canonical, os.R_OK):
-                tracks.append(canonical)
-    tracks.sort(key=lambda path: natural_key(path.relative_to(selected).as_posix()))
-    return tracks
+                tracks.append((candidate.relative_to(selected), canonical))
+    tracks.sort(key=lambda entry: natural_key(entry[0].as_posix()))
+    return [canonical for _, canonical in tracks]
 
 
 def validate_target(root_value: str, target_value: str, kind: str) -> tuple[Path, Path, list[Path], int]:
@@ -204,8 +204,17 @@ def validate_target(root_value: str, target_value: str, kind: str) -> tuple[Path
 def runtime_directory() -> Path:
     runtime = os.environ.get("XDG_RUNTIME_DIR", "").strip()
     base = Path(runtime) if runtime else Path(tempfile.gettempdir()) / f"omarchy-media-controls-{os.getuid()}"
+    base.mkdir(mode=0o700, parents=True, exist_ok=True)
+    metadata = base.lstat()
+    if not stat.S_ISDIR(metadata.st_mode) or metadata.st_uid != os.getuid():
+        raise OSError("Runtime directory must be a user-owned directory, not a symlink.")
+    if stat.S_IMODE(metadata.st_mode) & 0o022:
+        raise OSError("Runtime directory must not be writable by other users.")
     directory = base / "omarchy-media-controls"
-    directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+    directory.mkdir(mode=0o700, exist_ok=True)
+    metadata = directory.lstat()
+    if not stat.S_ISDIR(metadata.st_mode) or metadata.st_uid != os.getuid():
+        raise OSError("Private runtime path must be a user-owned directory, not a symlink.")
     os.chmod(directory, 0o700)
     return directory
 
@@ -280,6 +289,8 @@ def mpv_ipc_exchange(socket_path: Path, commands: list[list[object]]) -> list[ob
                             response = json.loads(line)
                         except (UnicodeDecodeError, json.JSONDecodeError):
                             continue
+                        if not isinstance(response, dict):
+                            continue
                         if response.get("request_id") != request_id:
                             continue
                         if response.get("error") != "success":
@@ -317,8 +328,10 @@ def load_mpv_playlist(socket_path: Path, playlist: Path, selected_index: int) ->
     if not isinstance(version, str) or not version:
         raise MpvIpcError("the IPC endpoint did not identify itself as mpv")
     mpv_ipc_exchange(socket_path, [
+        ["set_property", "pause", True],
         ["loadlist", str(playlist), "replace"],
         ["playlist-play-index", selected_index],
+        ["set_property", "pause", False],
     ])
 
 
@@ -534,7 +547,8 @@ def main() -> int:
     except (LaunchError, OSError) as error:
         return emit(launch_response("error", "xdg-open", False, str(error)), 1)
     if args.validate_only:
-        return emit({"status": "accepted", "target": str(target), "message": ""})
+        return emit({"status": "accepted", "target": str(target),
+                     "firstTrack": str(tracks[selected_index]), "message": ""})
     result = launch(
         root, target, tracks, selected_index, args.kind, args.toccata_mode, args.toccata_active
     )

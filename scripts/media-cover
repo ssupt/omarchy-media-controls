@@ -18,10 +18,15 @@ SIDE_CAR_NAMES = (
 
 
 def local_path(uri: str) -> Path | None:
-    parsed = urlparse(uri or "")
-    if parsed.scheme != "file":
+    try:
+        parsed = urlparse(uri or "")
+        path = unquote(parsed.path, errors="strict")
+    except (ValueError, UnicodeError):
         return None
-    return Path(unquote(parsed.path))
+    if (parsed.scheme != "file" or parsed.netloc.lower() not in {"", "localhost"}
+            or not path.startswith("/") or "\0" in path):
+        return None
+    return Path(path)
 
 
 def sidecar_cover(track: Path) -> Path | None:

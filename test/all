@@ -63,6 +63,10 @@ assert.equal(model.isVerticalPosition('right'), true)
 assert.equal(model.lyricsSourceLabel('embedded'), 'Embedded in audio file')
 assert.equal(model.pathToFileUrl('/Music/Björk #1'), 'file:///Music/Bj%C3%B6rk%20%231')
 assert.equal(model.fileUrlToPath('file:///Music/Bj%C3%B6rk%20%231'), '/Music/Björk #1')
+assert.equal(model.fileUrlToPath('file://localhost/Music/song.mp3'), '/Music/song.mp3')
+assert.equal(model.fileUrlToPath('file:/Music/song.mp3?ignored#fragment'), '/Music/song.mp3')
+for (const url of ['file://remote/Music/song.mp3', 'file:relative.mp3', 'file:///bad%00.mp3', 'file:///bad%FF.mp3'])
+  assert.equal(model.fileUrlToPath(url), '')
 assert.equal(model.booleanValue('off', true), false)
 assert.equal(model.booleanValue('yes', false), true)
 assert.equal(model.booleanValue('invalid', true), true)
@@ -155,6 +159,8 @@ assert.match(serviceSource, /target: "media"/)
 console.log('PASS: media model and UI contract')
 JS
 
+node "$ROOT/test/state.js"
+
 python3 - "$ROOT/scripts/media-cover" "$ROOT/scripts/media-lyrics" <<'PY'
 import importlib.machinery
 import importlib.util
@@ -199,6 +205,19 @@ assert lyrics.normalized_name("你好") == "你好"
 assert lyrics.normalized_name("Привет") == "привет"
 assert lyrics.similarity("你好", "再见") < 1
 assert lyrics.similarity("Привет", "До свидания") < 1
+for value in (None, "unknown", "NaN", "Infinity", [], {"seconds": 5}, -5):
+    assert lyrics.duration_seconds(value) == 0
+    best = lyrics.best_search_result([
+        {"trackName": "The Song", "artistName": "The Artist", "duration": value, "plainLyrics": "words"}
+    ], "The Song", "The Artist", "", 200)
+    assert best["plainLyrics"] == "words"
+best = lyrics.best_search_result([
+    {"trackName": "The Song", "artistName": "The Artist", "duration": 200},
+    {"trackName": "The Song!", "artistName": "The Artist", "plainLyrics": "available"},
+], "The Song", "The Artist", "", 200)
+assert best["plainLyrics"] == "available"
+for payload in (None, [], "invalid"):
+    assert lyrics.lyrics_from_probe(payload) == ("", "")
 
 with tempfile.TemporaryDirectory() as directory:
     root = Path(directory)
@@ -209,6 +228,15 @@ with tempfile.TemporaryDirectory() as directory:
     image.write_bytes(b"image")
     assert cover.local_path(track.as_uri()) == track
     assert cover.sidecar_cover(track) == image
+    for helper in (cover, lyrics):
+        assert helper.local_path("file://localhost" + str(track)) == track
+        assert helper.local_path("file:" + str(track) + "?ignored#fragment") == track
+        for url in ("file://remote-host" + str(track), "file:relative.mp3",
+                    "file://[invalid/song.mp3", "file:///bad%00.mp3", "file:///bad%FF.mp3"):
+            assert helper.local_path(url) is None
+    track.with_suffix(".lrc").write_text("\ufeff[00:01.00]Local words", encoding="utf-8")
+    local = lyrics.local_lyrics(track.as_uri())
+    assert local["source"] == "sidecar" and local["lyrics"] == "Local words"
 
     first_key = lyrics.cache_file("你好", "歌手", "专辑", 0)
     second_key = lyrics.cache_file("再见", "艺人", "唱片", 0)
@@ -217,6 +245,13 @@ with tempfile.TemporaryDirectory() as directory:
 
     malformed = root / "malformed.json"
     malformed.write_text(json.dumps({"status": "not-found", "fetchedAt": "invalid"}))
+    assert lyrics.read_cache(malformed) is None
+    for payload in ({"status": "error", "fetchedAt": 9999999999},
+                    {"status": "ok", "lyrics": ""},
+                    {"status": "not-found", "fetchedAt": float("inf")}):
+        malformed.write_text(json.dumps(payload))
+        assert lyrics.read_cache(malformed) is None
+    malformed.write_bytes(b"\xff\xfe")
     assert lyrics.read_cache(malformed) is None
 
     blocked_cache = root / "cache-file"
@@ -229,6 +264,8 @@ with tempfile.TemporaryDirectory() as directory:
 print("PASS: local media and lyrics helpers")
 PY
 
+python3 "$ROOT/test/helpers.py"
+
 python3 - "$ROOT/scripts/media-launch" <<'PY'
 import json
 import os
@@ -236,12 +273,14 @@ from pathlib import Path
 import socket
 import stat
 import subprocess
+import runpy
 import sys
 import tempfile
 import time
 
 
 launcher = Path(sys.argv[1])
+mpv_exchange = runpy.run_path(str(launcher))["mpv_ipc_exchange"]
 
 
 def invoke(arguments, environment):
@@ -342,6 +381,7 @@ with tempfile.TemporaryDirectory(prefix="media-controls-test-") as temporary:
     common = ["--root", str(music), "--target", str(selected), "--kind", "file"]
     completed, payload = invoke(["--validate-only", *common], environment)
     assert completed.returncode == 0 and payload["target"] == str(selected.resolve())
+    assert payload["firstTrack"] == str(selected.resolve())
 
     outside = sandbox / "outside.mp3"
     outside.write_bytes(b"audio")
@@ -408,6 +448,7 @@ with tempfile.TemporaryDirectory(prefix="media-controls-test-") as temporary:
         "server.listen()\n"
         "server.settimeout(30)\n"
         "running = True\n"
+        "paused = True\n"
         "while running:\n"
         "    try:\n"
         "        connection, _ = server.accept()\n"
@@ -423,11 +464,15 @@ with tempfile.TemporaryDirectory(prefix="media-controls-test-") as temporary:
         "            with open(os.environ['TEST_MPV_COMMAND_LOG'], 'a', encoding='utf-8') as handle:\n"
         "                handle.write(json.dumps(command) + '\\n')\n"
         "            response = {'error': 'success', 'request_id': request.get('request_id')}\n"
+        "            if command[:2] == ['set_property', 'pause']:\n"
+        "                paused = command[2]\n"
+        "            if command[:2] == ['get_property', 'pause']:\n"
+        "                response['data'] = paused\n"
         "            if command[:2] == ['get_property', 'mpv-version']:\n"
         "                response['data'] = '0.41.0'\n"
         "            if command and command[0] == 'quit':\n"
         "                running = False\n"
-        "            stream.write(json.dumps(response).encode('utf-8') + b'\\n')\n"
+        "            stream.write(b'[]\\n' + json.dumps(response).encode('utf-8') + b'\\n')\n"
         "            if not running:\n"
         "                break\n"
         "server.close()\n"
@@ -471,23 +516,29 @@ with tempfile.TemporaryDirectory(prefix="media-controls-test-") as temporary:
     assert mpv_socket == Path(environment["XDG_RUNTIME_DIR"]) / "omarchy-media-controls" / "mpv.sock"
     assert stat.S_IMODE(mpv_socket.stat().st_mode) == 0o600
     first_commands = json_lines(mpv_command_log)
-    assert first_commands[-3] == ["get_property", "mpv-version"]
-    assert first_commands[-2][0] == "loadlist" and first_commands[-2][2] == "replace"
-    assert first_commands[-1] == ["playlist-play-index", 1]
-    playlist = Path(first_commands[-2][1])
+    assert first_commands[-5] == ["get_property", "mpv-version"]
+    assert first_commands[-4] == ["set_property", "pause", True]
+    assert first_commands[-3][0] == "loadlist" and first_commands[-3][2] == "replace"
+    assert first_commands[-2] == ["playlist-play-index", 1]
+    assert first_commands[-1] == ["set_property", "pause", False]
+    playlist = Path(first_commands[-3][1])
     playlist_lines = playlist.read_text(encoding="utf-8").splitlines()
     assert playlist_lines == ["#EXTM3U", first.resolve().as_uri(), selected.resolve().as_uri(), tenth.resolve().as_uri()]
     assert stat.S_IMODE(playlist.stat().st_mode) == 0o600
     first_playlist_path = playlist
+    assert mpv_exchange(mpv_socket, [["get_property", "pause"]]) == [False]
 
+    mpv_exchange(mpv_socket, [["set_property", "pause", True]])
     _, payload = invoke(common, launch_environment)
     assert payload["backend"] == "mpv"
     assert payload["message"].startswith("Loaded in the existing mpv session.")
     assert len(json_lines(mpv_start_log)) == 1
-    repeat_commands = json_lines(mpv_command_log)[-3:]
+    repeat_commands = json_lines(mpv_command_log)[-5:]
     assert repeat_commands[0] == ["get_property", "mpv-version"]
-    assert Path(repeat_commands[1][1]) == first_playlist_path
-    assert repeat_commands[2] == ["playlist-play-index", 1]
+    assert Path(repeat_commands[2][1]) == first_playlist_path
+    assert repeat_commands[3] == ["playlist-play-index", 1]
+    assert repeat_commands[4] == ["set_property", "pause", False]
+    assert mpv_exchange(mpv_socket, [["get_property", "pause"]]) == [False]
 
     completed, payload = invoke(["--toccata-active", *common], launch_environment)
     assert completed.returncode == 0
@@ -507,7 +558,7 @@ with tempfile.TemporaryDirectory(prefix="media-controls-test-") as temporary:
     ], launch_environment)
     assert completed.returncode == 0 and payload["backend"] == "mpv"
     assert len(json_lines(mpv_start_log)) == 1
-    assert json_lines(mpv_command_log)[-1] == ["playlist-play-index", 1]
+    assert json_lines(mpv_command_log)[-2] == ["playlist-play-index", 1]
 
     completed, payload = invoke(["--toccata-status"], launch_environment)
     assert completed.returncode == 0
@@ -532,11 +583,11 @@ with tempfile.TemporaryDirectory(prefix="media-controls-test-") as temporary:
     _, payload = invoke(folder_arguments, launch_environment)
     assert payload["backend"] == "mpv"
     assert len(json_lines(mpv_start_log)) == 1
-    recursive_commands = json_lines(mpv_command_log)[-3:]
+    recursive_commands = json_lines(mpv_command_log)[-5:]
     assert recursive_commands[0] == ["get_property", "mpv-version"]
-    assert recursive_commands[1][0] == "loadlist"
-    assert recursive_commands[2] == ["playlist-play-index", 0]
-    recursive_playlist = Path(recursive_commands[1][1])
+    assert recursive_commands[2][0] == "loadlist"
+    assert recursive_commands[3] == ["playlist-play-index", 0]
+    recursive_playlist = Path(recursive_commands[2][1])
     recursive_lines = recursive_playlist.read_text(encoding="utf-8").splitlines()[1:]
     assert recursive_lines == [
         disc_two.resolve().as_uri(), disc_ten.resolve().as_uri(), root_song.resolve().as_uri()

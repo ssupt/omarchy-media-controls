@@ -78,9 +78,13 @@ KeyboardPanel {
   }
 
   onBrowserVisibleChanged: if (open) Qt.callLater(function() {
+    if (!root.open) return
     if (root.browserVisible) musicBrowser.forceActiveFocus()
     else {
       transcriptTabs.currentIndex = 0
+      root.resetLyricsScroll()
+      root.controller.updatePosition()
+      if (root.controlsService) root.controlsService.requestLyrics(false)
       keyScope.forceActiveFocus()
     }
   })

@@ -212,8 +212,12 @@ function pathToFileUrl(path) {
 
 function fileUrlToPath(url) {
   var value = String(url || "")
-  if (value.indexOf("file://") !== 0) return ""
-  try { return decodeURIComponent(value.replace(/^file:\/\//, "")) }
+  var match = /^file:(?:\/\/([^\/?#]*))?([^?#]*)/i.exec(value)
+  if (!match || (match[1] && match[1].toLowerCase() !== "localhost")) return ""
+  try {
+    var path = decodeURIComponent(match[2])
+    return path.indexOf("/") === 0 && path.indexOf("\u0000") === -1 ? path : ""
+  }
   catch (error) { return "" }
 }
 

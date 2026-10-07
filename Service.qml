@@ -52,6 +52,7 @@ Item {
   property string launchBackend: ""
   property string launchMessage: ""
   property string launchTarget: ""
+  property string launchFirstTrack: ""
   property string launchKind: ""
   property string launchToccataMode: "auto"
   property string pausedPlayerKey: ""
@@ -94,7 +95,7 @@ Item {
     var player = activePlayer
     pausedPlayerKey = ""
     pausedPlayerWasPlaying = false
-    if (!player || !player.isPlaying) return
+    if (!player || !player.isPlaying || !(player.canPause || player.canTogglePlaying)) return
     pausedPlayerKey = playerKey(player)
     pausedPlayerWasPlaying = true
     if (player.canPause) player.pause()
@@ -123,6 +124,7 @@ Item {
     if (launchState === "validating" || launchState === "launching" || launchState === "waiting")
       return false
     launchTarget = String(target || "")
+    launchFirstTrack = ""
     launchKind = String(kind || "")
     launchToccataMode = Model.toccataIntegrationMode(toccataMode)
     launchBackend = ""
@@ -170,6 +172,7 @@ Item {
       toccataPoll.start()
       tryToccataHandoff()
     } else {
+      if (launchBackend === "xdg-open" && launchKind === "folder") resumePausedPlayer()
       pausedPlayerKey = ""
       pausedPlayerWasPlaying = false
       toccataSignatureBeforeLaunch = ""
@@ -181,11 +184,12 @@ Item {
   function tryToccataHandoff() {
     if (launchState !== "waiting") return false
     var player = toccataPlayer()
-    if (!player || !hasTrackMetadata(player)) return false
+    if (!player || !player.isPlaying || !hasTrackMetadata(player)) return false
     var metadataUrl = Model.metadataText(player.metadata || {}, "xesam:url")
-    var targetMatches = metadataUrl.indexOf("file:") === 0
-      && Model.fileUrlToPath(metadataUrl) === launchTarget
-    if (Model.trackSignature(player) === toccataSignatureBeforeLaunch && !targetMatches)
+    var targetPath = Model.fileUrlToPath(metadataUrl)
+    var targetMatches = targetPath !== "" && targetPath === (launchFirstTrack || launchTarget)
+    if (targetPath !== "" && !targetMatches) return false
+    if (!targetMatches && Model.trackSignature(player) === toccataSignatureBeforeLaunch)
       return false
     preferredPlayerKey = playerKey(player)
     pausedPlayerKey = ""
@@ -359,6 +363,7 @@ Item {
   }
 
   function refreshTrack() {
+    coverDelay.stop()
     if (coverProc.running) coverProc.running = false
     if (lyricsProc.running) lyricsProc.running = false
     fallbackArtUrl = ""
@@ -382,7 +387,8 @@ Item {
       return
     }
     if (!force && lyricsTrackSignature === trackSignature
-        && (lyricsState.status === "ok" || lyricsState.status === "not-found")) return
+        && (lyricsState.status === "loading" || lyricsState.status === "ok"
+          || lyricsState.status === "not-found")) return
 
     if (embeddedLyrics !== "") {
       lyricsTrackSignature = trackSignature
@@ -406,7 +412,7 @@ Item {
       source: "",
       message: "Looking for lyrics…"
     }
-    lyricsProc.command = [
+    var command = [
       pluginScript("media-lyrics"),
       "--title", title,
       "--artist", artist,
@@ -414,6 +420,8 @@ Item {
       "--duration", String(Math.round(duration)),
       "--url", trackUrl
     ]
+    if (force) command.push("--refresh")
+    lyricsProc.command = command
     lyricsProc.running = true
   }
 
@@ -536,6 +544,7 @@ Item {
         var payload = Model.parseHelperResponse(text)
         if (payload.status === "accepted") {
           root.launchTarget = String(payload.target || root.launchTarget)
+          root.launchFirstTrack = String(payload.firstTrack || "")
           root.beginValidatedLaunch()
         }
         else {

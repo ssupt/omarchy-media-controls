@@ -4,6 +4,7 @@ import argparse
 import difflib
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -16,7 +17,7 @@ from urllib.parse import unquote, urlencode, urlparse
 from urllib.request import Request, urlopen
 
 
-USER_AGENT = "Omarchy Media Controls/0.1.0 (https://github.com/ssupt/omarchy-media-controls)"
+USER_AGENT = "Omarchy Media Controls/0.4.0 (https://github.com/ssupt/omarchy-media-controls)"
 NOT_FOUND_TTL = 6 * 60 * 60
 LYRIC_TAG_PRIORITY = (
     "lyrics", "unsyncedlyrics", "unsyncedlyric", "lyric", "wmlyrics",
@@ -55,6 +56,8 @@ def normalized_tag_key(value: object) -> str:
 
 
 def lyrics_from_probe(payload: dict) -> tuple[str, str]:
+    if not isinstance(payload, dict):
+        return "", ""
     tags: dict[str, str] = {}
     sections = [payload.get("format", {})]
     sections.extend(payload.get("streams", []) if isinstance(payload.get("streams"), list) else [])
@@ -86,10 +89,15 @@ def lyrics_from_probe(payload: dict) -> tuple[str, str]:
 
 
 def local_path(uri: str) -> Path | None:
-    parsed = urlparse(uri or "")
-    if parsed.scheme != "file":
+    try:
+        parsed = urlparse(uri or "")
+        path = unquote(parsed.path, errors="strict")
+    except (ValueError, UnicodeError):
         return None
-    return Path(unquote(parsed.path))
+    if (parsed.scheme != "file" or parsed.netloc.lower() not in {"", "localhost"}
+            or not path.startswith("/") or "\0" in path):
+        return None
+    return Path(path)
 
 
 def local_lyrics(uri: str) -> dict | None:
@@ -123,7 +131,7 @@ def local_lyrics(uri: str) -> dict | None:
             check=False,
             timeout=10,
         )
-    except (OSError, subprocess.SubprocessError):
+    except (OSError, UnicodeError, subprocess.SubprocessError):
         return None
     if completed.returncode != 0:
         return None
@@ -158,10 +166,20 @@ def similarity(left: str, right: str) -> float:
     return difflib.SequenceMatcher(None, normalized_left, normalized_right).ratio()
 
 
+def duration_seconds(value: object) -> int:
+    try:
+        duration = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return 0
+    return int(round(duration)) if math.isfinite(duration) and duration > 0 else 0
+
+
 def best_search_result(results: list, title: str, artist: str, album: str, duration: int) -> dict | None:
     candidates: list[tuple[float, dict]] = []
     for item in results:
         if not isinstance(item, dict):
+            continue
+        if result_response(item) is None:
             continue
         title_score = similarity(title, str(item.get("trackName", "")))
         artist_score = similarity(artist, str(item.get("artistName", "")))
@@ -170,7 +188,7 @@ def best_search_result(results: list, title: str, artist: str, album: str, durat
         score = title_score * 5 + artist_score * 3
         if album:
             score += similarity(album, str(item.get("albumName", ""))) * 1.5
-        result_duration = int(round(float(item.get("duration") or 0)))
+        result_duration = duration_seconds(item.get("duration"))
         if duration and result_duration:
             delta = abs(duration - result_duration)
             score += 3 if delta <= 2 else max(0, 2 - delta / 15)
@@ -219,18 +237,23 @@ def read_cache(path: Path | None) -> dict | None:
         return None
     try:
         cached = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+    except (OSError, UnicodeError, json.JSONDecodeError):
         return None
     if not isinstance(cached, dict):
         return None
     if cached.get("status") == "ok":
+        if not normalize_lyrics(cached.get("lyrics")) and not normalize_lyrics(cached.get("syncedLyrics")):
+            return None
         cached["source"] = "lrclib-cache"
         return cached
+    if cached.get("status") != "not-found":
+        return None
     try:
         fetched_at = float(cached.get("fetchedAt") or 0)
     except (TypeError, ValueError):
         return None
-    return cached if time.time() - fetched_at < NOT_FOUND_TTL else None
+    age = time.time() - fetched_at
+    return cached if math.isfinite(age) and 0 <= age < NOT_FOUND_TTL else None
 
 
 def write_cache(path: Path | None, payload: dict) -> None:
@@ -251,9 +274,9 @@ def write_cache(path: Path | None, payload: dict) -> None:
             pass
 
 
-def online_lyrics(title: str, artist: str, album: str, duration: int) -> dict:
+def online_lyrics(title: str, artist: str, album: str, duration: int, refresh: bool = False) -> dict:
     path = cache_file(title, artist, album, duration)
-    cached = read_cache(path)
+    cached = None if refresh else read_cache(path)
     if cached:
         return cached
 
@@ -292,7 +315,7 @@ def online_lyrics(title: str, artist: str, album: str, duration: int) -> dict:
         if error.code == 429:
             return response("error", message="LRCLIB rate limit reached. Try again later.")
         return response("error", message=f"Lyrics service returned HTTP {error.code}.")
-    except (URLError, TimeoutError, json.JSONDecodeError, OSError):
+    except (URLError, TimeoutError, UnicodeError, json.JSONDecodeError, OSError):
         return response("error", message="Could not reach the lyrics service.")
 
 
@@ -303,6 +326,7 @@ def main() -> int:
     parser.add_argument("--album", default="")
     parser.add_argument("--duration", type=float, default=0)
     parser.add_argument("--url", default="")
+    parser.add_argument("--refresh", action="store_true", help="Bypass the online lyrics cache")
     args = parser.parse_args()
 
     local = local_lyrics(args.url)
@@ -318,7 +342,8 @@ def main() -> int:
         return 0
 
     print(json.dumps(online_lyrics(
-        args.title.strip(), args.artist.strip(), args.album.strip(), int(round(max(0, args.duration)))
+        args.title.strip(), args.artist.strip(), args.album.strip(), duration_seconds(args.duration),
+        refresh=args.refresh,
     ), ensure_ascii=False))
     return 0
 
