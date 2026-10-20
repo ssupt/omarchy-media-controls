@@ -3,7 +3,6 @@ import QtQuick.Controls
 import QtQuick.Layouts
 import QtQml.Models
 import Qt.labs.folderlistmodel
-import Quickshell
 import qs.Commons
 import "Model.js" as Model
 
@@ -44,7 +43,7 @@ FocusScope {
   }
 
   function sourceRow(proxyRow) {
-    if (proxyRow < 0 || proxyRow >= sortedModel.rowCount()) return -1
+    if (proxyRow < 0 || proxyRow >= folderModel.count) return -1
     var sourceIndex = sortedModel.mapToSource(sortedModel.index(proxyRow, 0))
     return sourceIndex.valid ? sourceIndex.row : -1
   }
@@ -70,20 +69,20 @@ FocusScope {
     if (!entry) return
     if (entry.folder && !recursiveFolder) {
       currentFolder = entry.url
-      browser.currentIndex = sortedModel.rowCount() > 0 ? 0 : -1
+      browser.currentIndex = folderModel.count > 0 ? 0 : -1
     } else launchEntry(entry)
   }
 
   function goUp() {
     if (atRoot || String(folderModel.parentFolder || "") === "") return false
     currentFolder = String(folderModel.parentFolder)
-    browser.currentIndex = sortedModel.rowCount() > 0 ? 0 : -1
+    browser.currentIndex = folderModel.count > 0 ? 0 : -1
     return true
   }
 
   onRootUrlChanged: {
     currentFolder = rootUrl
-    browser.currentIndex = sortedModel.rowCount() > 0 ? 0 : -1
+    browser.currentIndex = folderModel.count > 0 ? 0 : -1
   }
 
   onVisibleChanged: if (visible) archiveTabs.currentIndex = 1
@@ -98,11 +97,11 @@ FocusScope {
       browser.positionViewAtIndex(browser.currentIndex, ListView.Contain)
       event.accepted = true
     } else if (event.key === Qt.Key_Home) {
-      browser.currentIndex = sortedModel.rowCount() > 0 ? 0 : -1
+      browser.currentIndex = folderModel.count > 0 ? 0 : -1
       browser.positionViewAtBeginning()
       event.accepted = true
     } else if (event.key === Qt.Key_End) {
-      browser.currentIndex = sortedModel.rowCount() - 1
+      browser.currentIndex = folderModel.count - 1
       browser.positionViewAtEnd()
       event.accepted = true
     } else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
@@ -136,6 +135,8 @@ FocusScope {
     showOnlyReadable: true
   }
 
+  // This proxy only sorts, so its count matches folderModel.count. Bind to that
+  // property: rowCount() can crash on Qt 6.12 before the proxy finishes creation.
   SortFilterProxyModel {
     id: sortedModel
     model: folderModel
@@ -296,7 +297,7 @@ FocusScope {
         anchors.centerIn: parent
         width: Math.min(310, parent.width - 40)
         spacing: 12
-        visible: root.musicRoot === "" || sortedModel.rowCount() === 0
+        visible: root.musicRoot === "" || folderModel.count === 0
 
         Rectangle {
           anchors.horizontalCenter: parent.horizontalCenter
@@ -344,14 +345,17 @@ FocusScope {
       ListView {
         id: browser
         anchors.fill: parent
-        visible: root.musicRoot !== "" && sortedModel.rowCount() > 0
+        visible: root.musicRoot !== "" && folderModel.count > 0
         model: sortedModel
         clip: true
         reuseItems: true
-        currentIndex: sortedModel.rowCount() > 0 ? 0 : -1
+        currentIndex: folderModel.count > 0 ? 0 : -1
         focus: true
         boundsBehavior: Flickable.StopAtBounds
-        onCountChanged: if (count > 0 && currentIndex < 0) currentIndex = 0
+        onCountChanged: {
+          if (count === 0) currentIndex = -1
+          else if (currentIndex < 0) currentIndex = 0
+        }
         ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
 
         delegate: Rectangle {

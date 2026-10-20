@@ -160,6 +160,7 @@ console.log('PASS: media model and UI contract')
 JS
 
 node "$ROOT/test/state.js"
+python3 "$ROOT/test/browser.py"
 
 python3 - "$ROOT/scripts/media-cover" "$ROOT/scripts/media-lyrics" <<'PY'
 import importlib.machinery

@@ -218,11 +218,13 @@ Run checks from the repository root:
 omarchy plugin validate .
 ```
 
-The suite needs Bash, Python, Node.js, jq, ripgrep, FFmpeg, `qmllint`, Quickshell
-QML modules, and Omarchy shell imports. It covers model logic, playback handoff,
-popup state, local extraction, lyrics caching, path validation, playlist ordering,
-and launcher fallbacks using temporary player stand-ins. It does not require a
-live Toccata installation or make online lyrics requests.
+The suite needs Bash, Python, Node.js, jq, ripgrep, FFmpeg, Qt 6's `qmllint` and
+`qmltestrunner`, Quickshell QML modules, and Omarchy shell imports. It covers
+model logic, playback handoff, popup state, local extraction, lyrics caching,
+path validation, playlist ordering, and launcher fallbacks using temporary
+player stand-ins. A headless Qt test covers archive startup, sorting, selection,
+navigation, and directory updates.
+It does not require a live Toccata installation or make online lyrics requests.
 
 If Omarchy is installed elsewhere, set `OMARCHY_PATH` for the tests:
 
