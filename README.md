@@ -1,13 +1,17 @@
 # Media Controls for Omarchy
 
-An Omarchy Quattro plugin for MPRIS playback controls, local music browsing,
-artwork, and lyrics. It replaces the built-in `omarchy.media` widget and supplies
-its own player service.
+MPRIS playback controls, artwork, lyrics, and a local music browser for Omarchy
+Quattro. The plugin replaces the built-in media widget and supplies its own
+player service.
 
-The bar shows the current track and transport buttons. When no track is
-available, **ARCHIVE** opens the music browser. The widget supports all four bar
-positions; side bars use a rotated track label and stacked controls. The popup
-uses the Monumental style, with separate **Transmission** and **Archive** views.
+![The current Player and Appearance pages, rendered with sample track metadata](preview.png)
+
+The widget works on all four bar edges. Its title area and buttons keep a fixed
+size as songs change. The bar and open player share the same track presentation:
+text and artwork fade in over 140 ms, following the shell's animation setting.
+Brief metadata gaps retain the previous track for up to 250 ms.
+Track and playback updates settle for 80 ms before appearing, so intermediate
+states from the player do not flash between songs.
 
 ## Install
 
@@ -15,35 +19,56 @@ uses the Monumental style, with separate **Transmission** and **Archive** views.
 omarchy plugin add https://github.com/ssupt/omarchy-media-controls.git --enable
 ```
 
-Omarchy installs the plugin as `ssupt.media-controls`. Enabling it replaces the
-built-in media widget; removing it while enabled restores that widget.
-
-### Requirements
+The plugin ID is `ssupt.media-controls`. Enabling it replaces `omarchy.media`;
+removing it while enabled restores the built-in widget.
 
 | Dependency | Used for |
 | --- | --- |
 | Omarchy Quattro with its Quickshell shell | Plugin hosting and UI |
 | Python 3.10 or later | Music, artwork, and lyrics helpers |
-| An MPRIS player | Transport controls and track metadata |
+| An MPRIS player | Playback controls and metadata |
+| `mpv` (optional) | Playing files and folders from the archive |
+| `xdg-open` (optional) | Opening selections with the desktop's default application |
 | `ffmpeg` and `ffprobe` (optional) | Embedded artwork and lyrics |
-| Toccata (optional) | Local playback, queueing, and session details |
-| mpv (optional) | Reusable local playback fallback |
-| `xdg-open` (optional) | Desktop fallback when playback backends fail |
 | Network access (optional) | LRCLIB lyrics lookup |
 
-Players such as Spotify, browsers, and local music players work when they expose
-MPRIS. Each player determines whether previous, next, play/pause, and seeking are
-available.
+Each player determines whether previous, next, play/pause, and seeking are
+available. The mpv backend needs an MPRIS plugin to expose bar controls.
 
-## Controls
+## Use and resize
 
-Click the bar's artwork or track label to open or close the popup. Click
-**ARCHIVE** when idle, or the Archive button in Transmission, to browse music.
-Scroll over the track label for previous or next.
+Click the bar's artwork or title to open the player. Scroll over the track label
+for previous or next. When idle, **ARCHIVE** opens the local music browser.
+
+The popup has three tabs:
+
+- **Player:** artwork, track details, transport controls, seeking, and lyrics.
+- **Archive:** browse and play local files or folders.
+- **Appearance:** one size slider automatically controls title width on top and
+  bottom bars or title length on side bars. Each orientation remembers its size.
+  A separate, smaller slider adjusts playback button spacing. You can also
+  choose whether Archive stays visible when idle.
+
+**Right-click the bar's artwork or title to open Appearance directly.** Changes
+apply immediately and save automatically. Artwork and buttons keep their size;
+the size slider controls the reserved title area. Hover over the bar to scroll
+long titles and artist names in place. Scrolling pauses at each end, resets when
+you leave or change tracks, and follows the shell's animation setting.
+**Reset appearance** restores the defaults.
+
+| Setting | Default | Range |
+| --- | --- | --- |
+| Horizontal title width (`labelWidth`) | 180 px | 80–320 px |
+| Side-bar title length (`verticalLabelLength`) | 125 px | 72–240 px |
+| Playback button spacing (`buttonSpacing`) | 1 px | 0–8 px |
+| Show Archive when idle (`showWhenIdle`) | Enabled | Enabled / disabled |
+
+Dimensions are logical pixels before shell scaling. Values are stored in the
+plugin's existing bar layout entry in `~/.config/omarchy/shell.json`.
 
 In Archive, click a row to select it. Double-click a folder to enter it or a file
-to play it. Each row's **Play** button plays the file or the folder recursively;
-the toolbar's **Folder** button plays the current folder recursively.
+to play it. A row's **Play** button plays the file or folder recursively; the
+toolbar's **Folder** button plays the current folder recursively.
 
 | View | Key | Action |
 | --- | --- | --- |
@@ -52,28 +77,27 @@ the toolbar's **Folder** button plays the current folder recursively.
 | Archive | Enter | Enter a folder or play a file |
 | Archive | Ctrl+Enter | Play the selection, including a folder recursively |
 | Archive | Backspace | Go to the parent folder |
-| Archive | Escape | Go up; at the root, return to Transmission or close when idle |
-| Archive | T | Open Transmission |
-| Transmission | Space | Play / pause |
-| Transmission | N / P | Next / previous track |
-| Transmission | B | Open Archive |
-| Transmission | Escape | Close the popup |
+| Archive | Escape | Go up; at the root, return to Player or close when idle |
+| Archive | T | Open Player |
+| Player | Space | Play / pause |
+| Player | N / P | Next / previous track |
+| Player | B | Open Archive |
+| Player / Appearance | Escape | Close the popup |
 
-Click the progress track to seek when the player supports seeking. Lyrics are
-selectable, scrollable text; timestamped lyrics are displayed as a plain
-transcript.
+Click the progress track to seek when supported. Lyrics are selectable,
+scrollable text; timestamped lyrics appear as a plain transcript.
 
-## Music folder and playback
+## Local music
 
-The archive root is the first configured location in this order:
+The archive uses the first configured location in this order:
 
 1. `MEDIA_CONTROLS_MUSIC_DIR`.
 2. The result of `xdg-user-dir MUSIC`.
-3. `$HOME/Music`, when neither of the above supplies a location.
+3. `$HOME/Music`, when neither supplies a location.
 
-The chosen folder must exist and be readable. The plugin does not create it or
-silently replace an invalid configured location with another folder. Directory
-contents update as files change, with folders first and names sorted naturally.
+The chosen folder must exist and be readable. An invalid configured location is
+reported in Archive. Contents update as files change, with folders first and
+names sorted naturally.
 
 Supported extensions, regardless of case:
 
@@ -81,62 +105,53 @@ Supported extensions, regardless of case:
 .flac .mp3 .ogg .oga .opus .m4a .mp4 .aac .alac .wav .wave
 ```
 
-A file selection queues supported sibling files and starts at the selected
-track. A folder selection queues supported files recursively. The fallback
-playlist skips hidden entries and directory symlinks. File symlinks must resolve
-inside the music root; the launcher rejects selections outside that root.
+Selecting a file queues supported sibling files and starts at that track.
+Selecting a folder queues supported files recursively. Playlists skip hidden
+entries and directory symlinks. File symlinks must resolve inside the music
+root, and selections outside that root are rejected.
 
-Playback routing depends on `toccataIntegration`:
+Playback uses one reusable mpv session without a video window. New selections
+replace its playlist and resume playback. If mpv is unavailable or fails, the
+launcher tries `xdg-open`. For files, this opens the default application; for
+folders, it opens the file manager without starting recursive playback. Archive
+reports the backend and any launch error.
 
-| Mode | Behavior |
-| --- | --- |
-| `auto` (default) | Use Toccata when it is connected through MPRIS. Otherwise use the fallback chain. |
-| `prefer` | Try Toccata even when it is not connected, allowing a selection to start it. |
-| `off` | Skip Toccata's CLI and use the fallback chain. |
+The service pauses the current player when possible before launching a
+selection. It attempts to resume that player if launching fails or a folder
+opens in the file manager. Transport controls always use MPRIS.
 
-If Toccata is unavailable or rejects the request, the launcher tries mpv, then
-`xdg-open`. mpv runs without a video window and reuses one idle session through a
-private Unix socket. A new selection replaces its playlist and resumes playback.
-Bar controls require an mpv MPRIS plugin; mpv alone does not guarantee them.
+## Lyrics and artwork
 
-For a file, `xdg-open` invokes the desktop's default application. For a folder,
-it opens the file manager and restores the previously paused player. Opening a
-folder this way does not start recursive playback. The archive reports the
-backend and any launch error.
+Lyrics are requested when Player opens or its track changes. The first
+available source is used:
 
-The service pauses the current player when it can before launching a selection.
-If launching fails, or Toccata does not expose playing media within eight seconds
-of accepting the request, it attempts to resume that player. Transport controls
-always use MPRIS, including when `toccataIntegration` is `off`.
+1. The player's MPRIS `xesam:asText` metadata.
+2. A same-name `.lrc` or `.txt` file beside a local audio file.
+3. Embedded lyric tags read with `ffprobe`.
+4. [LRCLIB](https://lrclib.net/docs), using track metadata.
 
-## Settings
+Online lookup sends the title, artist, album, and duration when available. It
+needs a title and artist, with no account or API key. Set
+`MEDIA_CONTROLS_ONLINE_LYRICS=0` in the shell's startup environment to disable it;
+local sources remain available.
 
-Edit the existing `ssupt.media-controls` entry under `bar.layout.left`,
-`bar.layout.center`, or `bar.layout.right` in `~/.config/omarchy/shell.json`:
+Online results are cached in `$XDG_CACHE_HOME/omarchy/media-controls/lyrics`
+(`~/.cache/omarchy/media-controls/lyrics` by default). Successful results are
+reused; missing results expire after six hours. Service errors are not cached.
+**Retry** bypasses the online cache while checking local sources first.
 
-```json
-{
-  "id": "ssupt.media-controls",
-  "toccataIntegration": "auto",
-  "showToccataDetails": true,
-  "showWhenIdle": true
-}
-```
+Artwork uses the player's MPRIS URL first. For local tracks without exported
+artwork, the helper looks beside the track for `cover`, `folder`, or `front`
+images, accepting JPG, JPEG, PNG, and WebP names without regard to case. It then
+tries embedded artwork with `ffmpeg`. Extracted covers are cached under
+`omarchy/media-controls/covers` in the cache directory and refreshed when the
+audio file's size or modification time changes.
 
-| Setting | Default | Effect |
-| --- | --- | --- |
-| `toccataIntegration` | `"auto"` | Select `auto`, `prefer`, or `off`; other values use `auto`. |
-| `showToccataDetails` | `true` | Show Toccata queue position, output state, and signal information in Transmission when integration is enabled and Toccata is active. |
-| `showWhenIdle` | `true` | Keep the ARCHIVE entry visible without track metadata. Set to `false` to hide it. |
+## Environment
 
-Toccata integration uses its public `play`, `status --json`, and `show` commands.
-It does not read Toccata databases or private application files.
-
-### Environment variables
-
-These variables belong in the Omarchy shell's startup environment, rather than
-`shell.json`. Restart the shell after changing them. Exporting a variable in a
-terminal does not change the environment of an already running shell.
+Set these variables in the Omarchy shell's startup environment, then restart the
+shell. Exporting a variable in a terminal does not affect an already running
+shell.
 
 | Variable | Default | Effect |
 | --- | --- | --- |
@@ -145,52 +160,23 @@ terminal does not change the environment of an already running shell.
 | `XDG_CACHE_HOME` | `~/.cache` | Base directory for artwork and lyrics caches. |
 | `XDG_RUNTIME_DIR` | A private per-user directory under the system temporary directory | Base directory for mpv's socket, lock, and playlists. |
 
-For custom installations and testing, the helpers also accept executable paths
-through `MEDIA_CONTROLS_TOCCATA`, `MEDIA_CONTROLS_MPV`,
-`MEDIA_CONTROLS_XDG_OPEN`, `MEDIA_CONTROLS_XDG_USER_DIR`,
+For custom installations and testing, executable paths can be supplied through
+`MEDIA_CONTROLS_MPV`, `MEDIA_CONTROLS_XDG_OPEN`, `MEDIA_CONTROLS_XDG_USER_DIR`,
 `MEDIA_CONTROLS_FFMPEG`, and `MEDIA_CONTROLS_FFPROBE`.
 `MEDIA_CONTROLS_LRCLIB_BASE_URL` overrides the lyrics API endpoint.
 
-## Lyrics and artwork
-
-Lyrics are requested when Transmission opens or its track changes. Resolution
-stops at the first available source:
-
-1. Lyrics exported by the player as MPRIS `xesam:asText` metadata.
-2. A same-name `.lrc` or `.txt` file beside a local audio file.
-3. Embedded lyric tags read with `ffprobe`.
-4. [LRCLIB](https://lrclib.net/docs), using track metadata.
-
-The online lookup sends the title, artist, album, and duration when available.
-It needs a title and artist, and requires no account or API key. Disabling online
-lyrics still allows player metadata, sidecars, and embedded tags.
-
-Online results are cached in `$XDG_CACHE_HOME/omarchy/media-controls/lyrics`
-(`~/.cache/omarchy/media-controls/lyrics` by default). Successful results are
-reused; missing results expire after six hours. Service errors are not cached.
-The **Retry** button bypasses the online cache while still checking local sources
-first.
-
-Artwork uses the player's MPRIS URL first. For local tracks without exported
-artwork, the helper checks for `cover`, `folder`, or `front` images beside the
-track, accepting JPG, JPEG, PNG, or WebP names without regard to case. It then
-tries embedded artwork with `ffmpeg`. Extracted covers are cached under
-`omarchy/media-controls/covers` in the cache directory and invalidated when the
-audio file's size or modification time changes.
-
 ## Troubleshooting
 
-- **Archive unavailable:** Check the resolved Music folder, its permissions, and
-  `MEDIA_CONTROLS_MUSIC_DIR`. After creating a missing root, restart the shell.
-- **Music plays but controls are absent:** Confirm that the chosen player exposes
-  MPRIS. The mpv fallback needs an MPRIS plugin.
-- **A folder opens in the file manager:** Both playback backends were unavailable
-  or failed. Install mpv or configure Toccata to play folders recursively.
-- **Lyrics are missing:** Check player metadata or local lyric files. For embedded
-  tags, install `ffprobe`; for online lookup, check network access and the online
-  lyrics setting. Use Retry to refresh a cached miss.
+- **Archive unavailable:** Check the Music folder and its permissions. After
+  creating a missing root or changing its environment setting, restart the shell.
+- **Music plays but controls are absent:** Check that the player exposes MPRIS.
+  The mpv backend needs an MPRIS plugin.
+- **A folder opens in the file manager:** mpv was unavailable or failed. Install
+  mpv to play folders recursively.
+- **Lyrics are missing:** Check track metadata, local lyric files, and network
+  access. Embedded lyrics need `ffprobe`. Use Retry to refresh a cached miss.
 
-The service also exposes Omarchy's `media` IPC target:
+The service exposes Omarchy's `media` IPC target:
 
 ```bash
 omarchy-shell media status
@@ -211,6 +197,18 @@ omarchy plugin remove ssupt.media-controls
 
 ## Development
 
+The root `BarWidget.qml` and `Service.qml` are manifest entry points. The QML
+implementation lives under:
+
+| Path | Contents |
+| --- | --- |
+| `qml/bar/` | Bar widget and appearance persistence |
+| `qml/player/` | Popup, player, archive, and appearance pages |
+| `qml/components/` | Shared track presentation and artwork |
+| `qml/services/` | MPRIS service and helper orchestration |
+| `qml/style/` | Monumental theme and controls |
+| `qml/Model.js` | Shared metadata and player logic |
+
 Run checks from the repository root:
 
 ```bash
@@ -219,25 +217,31 @@ omarchy plugin validate .
 ```
 
 The suite needs Bash, Python, Node.js, jq, ripgrep, FFmpeg, Qt 6's `qmllint` and
-`qmltestrunner`, Quickshell QML modules, and Omarchy shell imports. It covers
-model logic, playback handoff, popup state, local extraction, lyrics caching,
-path validation, playlist ordering, and launcher fallbacks using temporary
-player stand-ins. A headless Qt test covers archive startup, sorting, selection,
-navigation, and directory updates.
-It does not require a live Toccata installation or make online lyrics requests.
+`qmltestrunner`, Quickshell QML modules, and Omarchy shell imports. It checks
+archive startup and navigation, fixed bar geometry, shared transitions,
+appearance controls and save requests, playback handoff, extraction, lyrics
+caching, path validation, playlist ordering, and launcher fallbacks. Tests use
+temporary player stand-ins and make no online lyrics requests.
 
-If Omarchy is installed elsewhere, set `OMARCHY_PATH` for the tests:
+Set `OMARCHY_PATH` if Omarchy is installed outside `/usr/share/omarchy`:
 
 ```bash
 OMARCHY_PATH=/path/to/omarchy ./test/all
 ```
 
-CI runs the suite and manifest validator in Arch Linux against the Omarchy
-revision pinned in [the workflow](.github/workflows/ci.yml).
+Regenerate `preview.png` from the production QML with sample metadata:
+
+```bash
+python3 test/render-preview.py
+```
+
+The renderer also needs Qt 6's `qml` executable. CI runs the suite and manifest
+validator in Arch Linux against the Omarchy revision pinned in
+[the workflow](.github/workflows/ci.yml).
 
 ## License
 
-Plugin code is licensed under [MIT](LICENSE). Bundled DINish and Hakkou Mincho
+Plugin code uses the [MIT license](LICENSE). Bundled DINish and Hakkou Mincho
 fonts use the [SIL Open Font License 1.1](assets/fonts/OFL.txt).
 
 More plugins: [omarchy-plugins](https://github.com/ssupt/omarchy-plugins).
