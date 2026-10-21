@@ -4,7 +4,8 @@ import QtQuick.Layouts
 import Quickshell
 import qs.Ui
 import qs.Commons
-import "Model.js" as Model
+import "../Model.js" as Model
+import "../style"
 
 KeyboardPanel {
   id: root

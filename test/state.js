@@ -2,10 +2,10 @@ const assert = require('node:assert/strict')
 const fs = require('node:fs')
 const path = require('node:path')
 const vm = require('node:vm')
-const Model = require('../Model.js')
+const Model = require('../qml/Model.js')
 
-const serviceSource = fs.readFileSync(path.join(__dirname, '../Service.qml'), 'utf8')
-const playerSource = fs.readFileSync(path.join(__dirname, '../PlayerWindow.qml'), 'utf8')
+const serviceSource = fs.readFileSync(path.join(__dirname, '../qml/services/MediaService.qml'), 'utf8')
+const playerSource = fs.readFileSync(path.join(__dirname, '../qml/player/PlayerWindow.qml'), 'utf8')
 
 // Execute the production QML functions with player and timer stand-ins.
 function service(overrides = {}) {

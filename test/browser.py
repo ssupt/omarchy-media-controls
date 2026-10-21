@@ -14,7 +14,8 @@ RUNNER = shutil.which("qmltestrunner", path="/usr/lib/qt6/bin:" + os.environ.get
 
 QML = '''import QtQuick
 import QtTest
-import "plugin" as Plugin
+import "plugin/qml/player" as Player
+import "plugin/qml/style" as Visuals
 
 Item {
   width: 600
@@ -32,8 +33,8 @@ Item {
     function launchPath(path, kind, mode) { launched = [path, kind, mode] }
   }
 
-  Plugin.MonumentStyle { id: monument }
-  Plugin.MusicBrowser {
+  Visuals.MonumentStyle { id: monument }
+  Player.MusicBrowser {
     id: archive
     width: 480
     height: 560

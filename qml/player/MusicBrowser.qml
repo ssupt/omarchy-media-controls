@@ -4,7 +4,8 @@ import QtQuick.Layouts
 import QtQml.Models
 import Qt.labs.folderlistmodel
 import qs.Commons
-import "Model.js" as Model
+import "../Model.js" as Model
+import "../style"
 
 FocusScope {
   id: root

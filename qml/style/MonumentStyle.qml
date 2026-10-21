@@ -64,19 +64,19 @@ Item {
 
   FontLoader {
     id: machineRegular
-    source: Qt.resolvedUrl("assets/fonts/DINish-Regular.ttf")
+    source: Qt.resolvedUrl("../../assets/fonts/DINish-Regular.ttf")
   }
 
   FontLoader {
-    source: Qt.resolvedUrl("assets/fonts/DINish-Bold.ttf")
+    source: Qt.resolvedUrl("../../assets/fonts/DINish-Bold.ttf")
   }
 
   FontLoader {
-    source: Qt.resolvedUrl("assets/fonts/DINish-Italic.ttf")
+    source: Qt.resolvedUrl("../../assets/fonts/DINish-Italic.ttf")
   }
 
   FontLoader {
     id: archiveRegular
-    source: Qt.resolvedUrl("assets/fonts/HakkouMincho.ttf")
+    source: Qt.resolvedUrl("../../assets/fonts/HakkouMincho.ttf")
   }
 }

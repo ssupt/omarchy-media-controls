@@ -28,9 +28,9 @@ while IFS= read -r source; do
 done < <(cd "$ROOT" && rg --files -g '*.qml' | sort)
 echo "PASS: QML syntax and imports"
 
-node - "$ROOT/Model.js" "$ROOT/BarWidget.qml" "$ROOT/Service.qml" \
-  "$ROOT/PlayerWindow.qml" "$ROOT/MusicBrowser.qml" \
-  "$ROOT/MonumentStyle.qml" "$ROOT/MonumentButton.qml" <<'JS'
+node - "$ROOT/qml/Model.js" "$ROOT/qml/bar/MediaBar.qml" "$ROOT/qml/services/MediaService.qml" \
+  "$ROOT/qml/player/PlayerWindow.qml" "$ROOT/qml/player/MusicBrowser.qml" \
+  "$ROOT/qml/style/MonumentStyle.qml" "$ROOT/qml/style/MonumentButton.qml" <<'JS'
 const assert = require('node:assert/strict')
 const fs = require('node:fs')
 const model = require(process.argv[2])
