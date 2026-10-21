@@ -549,7 +549,7 @@ PY
 jq -e '
   .schemaVersion == 1
   and .id == "ssupt.media-controls"
-  and .version == "0.4.0"
+  and .version == "0.5.0"
   and .author == "ssupt"
   and .kinds == ["service", "bar-widget"]
   and (.kinds | index("panel") == null)

@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "ssupt.media-controls",
   "name": "Media Controls",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "author": "ssupt",
   "description": "MPRIS controls with artwork, lyrics, local music browsing, and adjustable bar layout",
   "kinds": [
