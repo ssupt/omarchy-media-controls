@@ -15,11 +15,6 @@ function booleanValue(value, fallback) {
   return !!fallback
 }
 
-function toccataIntegrationMode(value) {
-  var mode = textValue(value).toLowerCase()
-  return mode === "off" || mode === "prefer" ? mode : "auto"
-}
-
 function metadataText(metadata, key) {
   if (!metadata || typeof metadata !== "object") return ""
   return textValue(metadata[key])
@@ -252,7 +247,6 @@ if (typeof module !== "undefined") {
   module.exports = {
     textValue: textValue,
     booleanValue: booleanValue,
-    toccataIntegrationMode: toccataIntegrationMode,
     metadataText: metadataText,
     durationSeconds: durationSeconds,
     formatDuration: formatDuration,

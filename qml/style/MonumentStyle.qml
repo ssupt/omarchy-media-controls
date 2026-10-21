@@ -57,11 +57,6 @@ Item {
     return playing ? authorityText : warning
   }
 
-  function integrationLabel(mode) {
-    var value = String(mode || "auto").toUpperCase()
-    return value === "OFF" ? "GENERIC" : "TOCCATA " + value
-  }
-
   FontLoader {
     id: machineRegular
     source: Qt.resolvedUrl("../../assets/fonts/DINish-Regular.ttf")

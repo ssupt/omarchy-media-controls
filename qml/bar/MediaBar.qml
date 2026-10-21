@@ -1,15 +1,15 @@
 import QtQuick
 import QtQuick.Controls
-import Quickshell
 import qs.Ui
 import qs.Commons
 import "../Model.js" as Model
+import "../components"
 import "../style"
 import "../player"
 
 BarWidget {
   id: root
-  moduleName: "omarchy.media"
+  moduleName: "ssupt.media-controls"
 
   readonly property var controlsService: bar && bar.shell
     ? bar.shell.serviceFor("ssupt.media-controls") : null
@@ -27,27 +27,71 @@ BarWidget {
     : (activePlayer ? String(activePlayer.trackAlbum || "") : "")
   readonly property string artUrl: controlsService ? controlsService.artUrl
     : (activePlayer ? String(activePlayer.trackArtUrl || "") : "")
-  readonly property real duration: controlsService ? controlsService.duration
+  readonly property real currentDuration: controlsService ? controlsService.duration
     : (activePlayer && activePlayer.lengthSupported
       ? Model.durationSeconds(activePlayer.length) : 0)
-  readonly property bool playing: !!(activePlayer && activePlayer.isPlaying)
+  readonly property real duration: trackPresentation.displayedDuration
+  readonly property bool playing: trackPresentation.displayedPlaying
+  readonly property bool canGoPrevious: trackPresentation.displayedCanGoPrevious
+  readonly property bool canGoNext: trackPresentation.displayedCanGoNext
+  readonly property bool canPlayPause: trackPresentation.displayedCanPlayPause
+  readonly property bool canSeek: trackPresentation.displayedCanSeek
   readonly property string lyrics: controlsService ? controlsService.lyrics : ""
   readonly property bool lyricsLoading: controlsService ? controlsService.lyricsLoading : false
   readonly property string lyricsSource: controlsService ? controlsService.lyricsSource : ""
   readonly property string lyricsMessage: controlsService ? controlsService.lyricsMessage : ""
-  readonly property string integrationMode: Model.toccataIntegrationMode(
-    root.setting("toccataIntegration", "auto"))
-  readonly property bool showToccataDetails: Model.booleanValue(
-    root.setting("showToccataDetails", true), true)
   readonly property bool showWhenIdle: Model.booleanValue(
     root.setting("showWhenIdle", true), true)
   readonly property bool vertical: bar ? Model.isVerticalPosition(bar.position) : false
-  readonly property string label: Model.nowPlayingLabel(title, artist)
+  readonly property string label: Model.nowPlayingLabel(
+    trackPresentation.displayedTitle, trackPresentation.displayedArtist)
   property alias browsing: playerWindow.browserVisible
   property real displayedPosition: 0
   property bool opened: false
-  property real maxHorizontalLabelWidth: Style.space(180)
-  property real maxVerticalLabelLength: Style.space(125)
+  readonly property real horizontalLabelWidth: Style.space(labelExtent("labelWidth", 180, 80, 320))
+  readonly property real verticalLabelLength: Style.space(labelExtent("verticalLabelLength", 125, 72, 240))
+  readonly property real buttonSpacing: Style.space(labelExtent("buttonSpacing", 1, 0, 8))
+  readonly property var presentation: trackPresentation
+  readonly property bool showingMedia: trackPresentation.showingMedia
+  readonly property int transitionDuration: Style.duration(140)
+  readonly property bool trackHovered: trackHover.hovered && !opened
+
+  function labelExtent(name, fallback, minimum, maximum) {
+    var value = Number(root.setting(name, fallback))
+    return isFinite(value) && (value > 0 || minimum === 0)
+      ? Math.max(minimum, Math.min(maximum, value)) : fallback
+  }
+
+  function setAppearance(name, value) {
+    if (["labelWidth", "verticalLabelLength", "buttonSpacing", "showWhenIdle"].indexOf(name) < 0) return
+    var next = { id: root.moduleName }
+    for (var key in root.settings) if (key !== "id") next[key] = root.settings[key]
+    if (name === "showWhenIdle") next[name] = !!value
+    else {
+      var number = Number(value)
+      if (!isFinite(number)) return
+      if (name === "buttonSpacing") next[name] = Math.max(0, Math.min(8, Math.round(number)))
+      else next[name] = name === "labelWidth" ? Math.max(80, Math.min(320, Math.round(number)))
+        : Math.max(72, Math.min(240, Math.round(number)))
+    }
+    root.settings = next
+    appearanceSave.restart()
+  }
+
+  function resetAppearance() {
+    setAppearance("labelWidth", 180)
+    setAppearance("verticalLabelLength", 125)
+    setAppearance("buttonSpacing", 1)
+    setAppearance("showWhenIdle", true)
+  }
+
+  Timer {
+    id: appearanceSave
+    interval: 250
+    onTriggered: if (root.bar && root.bar.shell
+        && typeof root.bar.shell.updateEntryInline === "function")
+      root.bar.shell.updateEntryInline(root.moduleName, root.settings)
+  }
 
   function runAction(action) {
     if (controlsService) return controlsService.runAction(action)
@@ -74,22 +118,28 @@ BarWidget {
 
   function lyricsDisplayText() {
     if (lyrics !== "") return lyrics
-    if (lyricsLoading) return "Finding the words…"
+    if (lyricsLoading || (showingMedia && controlsService
+        && controlsService.lyricsState.status === "idle")) return "Finding the words…"
     if (lyricsMessage !== "") return lyricsMessage
-    return hasMedia ? "No lyrics available for this track." : "Start a song to see its lyrics."
+    return showingMedia ? "No lyrics available for this track." : "Start a song to see its lyrics."
   }
 
   function open() {
-    hideTrackTooltip()
     opened = true
-    if (!browsing && hasMedia) {
+    if (!browsing && !playerWindow.settingsVisible && hasMedia) {
       resetLyricsScroll()
       updatePosition()
       if (controlsService) controlsService.requestLyrics(false)
     }
   }
 
+  function openAppearance() {
+    playerWindow.settingsVisible = true
+    open()
+  }
+
   function openBrowser() {
+    playerWindow.settingsVisible = false
     browsing = true
     open()
   }
@@ -99,17 +149,16 @@ BarWidget {
       openBrowser()
       return
     }
+    playerWindow.settingsVisible = false
     browsing = false
     open()
   }
 
   function close() {
     opened = false
-    hideTrackTooltip()
   }
 
   function openDetails() {
-    hideTrackTooltip()
     if (!hasMedia) {
       if (opened && browsing) close()
       else openBrowser()
@@ -120,16 +169,7 @@ BarWidget {
     else openNowPlaying()
   }
 
-  function showTrackTooltip() {
-    if (bar && !opened) bar.showTooltip(root, hasMedia ? label : "Browse music archive")
-  }
-
-  function hideTrackTooltip() {
-    if (bar) bar.hideTooltip(root)
-  }
-
-  onOpenedChanged: if (opened) hideTrackTooltip()
-  onHasMediaChanged: if (!hasMedia && opened) {
+  onShowingMediaChanged: if (!showingMedia && opened) {
     if (showWhenIdle) browsing = true
     else close()
   }
@@ -141,8 +181,9 @@ BarWidget {
     function onTrackSignatureChanged() {
       root.updatePosition()
       root.resetLyricsScroll()
-      if (root.opened && !root.browsing && root.controlsService) Qt.callLater(function() {
-        root.controlsService.requestLyrics(false)
+      if (root.opened && root.hasMedia && !root.browsing && !playerWindow.settingsVisible
+          && root.controlsService) Qt.callLater(function() {
+        if (root.hasMedia) root.controlsService.requestLyrics(false)
       })
     }
   }
@@ -150,18 +191,37 @@ BarWidget {
   Timer {
     interval: 1000
     repeat: true
-    running: root.opened && !root.browsing && root.playing
+    running: root.opened && !root.browsing && !playerWindow.settingsVisible && root.playing
     triggeredOnStart: true
     onTriggered: root.updatePosition()
   }
 
-  visible: hasMedia || showWhenIdle
+  visible: showingMedia || showWhenIdle
   implicitWidth: visible ? (vertical ? barSize : horizontalLayout.implicitWidth) : 0
   implicitHeight: visible ? (vertical ? verticalLayout.implicitHeight : barSize) : 0
 
   MonumentStyle {
     id: monument
   }
+
+  TrackPresentation {
+    id: trackPresentation
+    available: root.hasMedia
+    title: root.title
+    artist: root.artist
+    album: root.album
+    artUrl: root.artUrl
+    playing: !!(root.activePlayer && root.activePlayer.isPlaying)
+    canGoPrevious: !!(root.activePlayer && root.activePlayer.canGoPrevious)
+    canGoNext: !!(root.activePlayer && root.activePlayer.canGoNext)
+    canPlayPause: !!(root.activePlayer && (root.activePlayer.canTogglePlaying
+      || root.activePlayer.canPlay || root.activePlayer.canPause))
+    canSeek: !!(root.activePlayer && root.activePlayer.canSeek)
+    duration: root.currentDuration
+    transitionDuration: root.transitionDuration
+  }
+
+  HoverHandler { id: trackHover }
 
   onBarChanged: {
     if (horizontalIdentity) horizontalIdentity.syncClickRegistration()
@@ -188,6 +248,7 @@ BarWidget {
 
       function triggerPress(button) {
         if (button === Qt.LeftButton) root.openDetails()
+        else if (button === Qt.RightButton) root.openAppearance()
       }
 
       function syncClickRegistration() {
@@ -209,49 +270,55 @@ BarWidget {
         spacing: Style.space(7)
 
         Artwork {
-          visible: root.hasMedia
+          visible: root.showingMedia
           extent: Math.max(Style.space(24), root.barSize - Style.space(9))
           anchors.verticalCenter: parent.verticalCenter
         }
 
         BrowserIcon {
-          visible: !root.hasMedia
+          visible: !root.showingMedia
           extent: Math.max(Style.space(24), root.barSize - Style.space(9))
           anchors.verticalCenter: parent.verticalCenter
         }
 
         Column {
-          visible: root.hasMedia
-          width: Math.min(root.maxHorizontalLabelWidth,
-            Math.max(Style.space(72), Math.max(horizontalTitle.implicitWidth,
-              horizontalArtist.implicitWidth)))
+          objectName: "barTrackDetails"
+          visible: root.showingMedia
+          width: root.horizontalLabelWidth
+          opacity: trackPresentation.contentOpacity
           spacing: Style.space(1)
           anchors.verticalCenter: parent.verticalCenter
 
-          Text {
+          ScrollingLabel {
             id: horizontalTitle
+            objectName: "barTitleScroll"
             width: parent.width
-            text: root.title || "Unknown track"
+            hovered: root.trackHovered
+            motionEnabled: root.transitionDuration > 0
+            pixelsPerSecond: Style.space(28)
+            text: trackPresentation.displayedTitle || "Unknown track"
             color: root.bar ? root.bar.barForeground : Color.foreground
             font.family: root.bar ? root.bar.fontFamily : Style.font.family
             font.pixelSize: Style.font.bodySmall
             font.bold: true
-            elide: Text.ElideRight
           }
 
-          Text {
+          ScrollingLabel {
             id: horizontalArtist
+            objectName: "barArtistScroll"
             width: parent.width
-            text: root.artist || "Unknown artist"
+            hovered: root.trackHovered
+            motionEnabled: root.transitionDuration > 0
+            pixelsPerSecond: Style.space(28)
+            text: trackPresentation.displayedArtist || "Unknown artist"
             color: Qt.darker(root.bar ? root.bar.barForeground : Color.foreground, 1.35)
             font.family: root.bar ? root.bar.fontFamily : Style.font.family
             font.pixelSize: Style.font.caption
-            elide: Text.ElideRight
           }
         }
 
         Text {
-          visible: !root.hasMedia
+          visible: !root.showingMedia
           anchors.verticalCenter: parent.verticalCenter
           text: "ARCHIVE"
           color: root.bar ? root.bar.barForeground : Color.foreground
@@ -266,19 +333,21 @@ BarWidget {
         anchors.fill: parent
         hoverEnabled: true
         cursorShape: Qt.PointingHandCursor
-        onClicked: root.openDetails()
+        acceptedButtons: Qt.LeftButton | Qt.RightButton
+        onClicked: function(mouse) {
+          if (mouse.button === Qt.RightButton) root.openAppearance()
+          else root.openDetails()
+        }
         onWheel: function(wheel) {
           if (!root.hasMedia) return
           if (wheel.angleDelta.y > 0) root.runAction("previous")
           else if (wheel.angleDelta.y < 0) root.runAction("next")
         }
-        onEntered: if (!root.opened) root.showTrackTooltip()
-        onExited: root.hideTrackTooltip()
       }
     }
 
     Rectangle {
-      visible: root.hasMedia
+      visible: root.showingMedia
       width: Style.space(3)
       height: Style.space(10)
       anchors.verticalCenter: parent.verticalCenter
@@ -286,25 +355,24 @@ BarWidget {
     }
 
     Row {
-      visible: root.hasMedia
-      spacing: Style.space(1)
+      visible: root.showingMedia
+      spacing: root.buttonSpacing
       anchors.verticalCenter: parent.verticalCenter
 
       MediaButton {
         action: "previous"
         iconText: "󰒮"
-        enabled: !!root.activePlayer && root.activePlayer.canGoPrevious
+        enabled: root.canGoPrevious
       }
       MediaButton {
         action: "playPause"
         iconText: root.playing ? "󰏤" : "󰐊"
-        enabled: !!root.activePlayer && (root.activePlayer.canTogglePlaying
-          || root.activePlayer.canPlay || root.activePlayer.canPause)
+        enabled: root.canPlayPause
       }
       MediaButton {
         action: "next"
         iconText: "󰒭"
-        enabled: !!root.activePlayer && root.activePlayer.canGoNext
+        enabled: root.canGoNext
       }
     }
   }
@@ -327,6 +395,7 @@ BarWidget {
 
       function triggerPress(button) {
         if (button === Qt.LeftButton) root.openDetails()
+        else if (button === Qt.RightButton) root.openAppearance()
       }
 
       function syncClickRegistration() {
@@ -343,13 +412,13 @@ BarWidget {
         registeredBar.unregisterClickTarget(verticalIdentity)
 
       Artwork {
-        visible: root.hasMedia
+        visible: root.showingMedia
         extent: parent.height
         anchors.centerIn: parent
       }
 
       BrowserIcon {
-        visible: !root.hasMedia
+        visible: !root.showingMedia
         extent: parent.height
         anchors.centerIn: parent
       }
@@ -358,18 +427,19 @@ BarWidget {
         anchors.fill: parent
         hoverEnabled: true
         cursorShape: Qt.PointingHandCursor
-        onClicked: root.openDetails()
-        onEntered: if (!root.opened) root.showTrackTooltip()
-        onExited: root.hideTrackTooltip()
+        acceptedButtons: Qt.LeftButton | Qt.RightButton
+        onClicked: function(mouse) {
+          if (mouse.button === Qt.RightButton) root.openAppearance()
+          else root.openDetails()
+        }
       }
     }
 
     Item {
       id: verticalLabelContainer
-      visible: root.hasMedia
+      visible: root.showingMedia
       width: parent.width
-      height: Math.min(root.maxVerticalLabelLength,
-        Math.max(Style.space(72), verticalLabel.implicitWidth))
+      height: root.verticalLabelLength
       clip: true
 
       property bool pressable: true
@@ -379,6 +449,7 @@ BarWidget {
 
       function triggerPress(button) {
         if (button === Qt.LeftButton) root.openDetails()
+        else if (button === Qt.RightButton) root.openAppearance()
       }
 
       function syncClickRegistration() {
@@ -394,15 +465,19 @@ BarWidget {
       Component.onDestruction: if (registeredBar && registeredBar.unregisterClickTarget)
         registeredBar.unregisterClickTarget(verticalLabelContainer)
 
-      Text {
+      ScrollingLabel {
         id: verticalLabel
+        objectName: "barSideScroll"
         width: parent.height - Style.space(8)
+        hovered: root.trackHovered
+        motionEnabled: root.transitionDuration > 0
+        pixelsPerSecond: Style.space(28)
         text: root.label
+        opacity: trackPresentation.contentOpacity
         color: root.bar ? root.bar.barForeground : Color.foreground
         font.family: root.bar ? root.bar.fontFamily : Style.font.family
         font.pixelSize: Style.font.caption
         font.bold: true
-        elide: Text.ElideRight
         horizontalAlignment: Text.AlignHCenter
         anchors.centerIn: parent
         rotation: root.bar && root.bar.position === "right" ? 90 : -90
@@ -413,36 +488,37 @@ BarWidget {
         anchors.fill: parent
         hoverEnabled: true
         cursorShape: Qt.PointingHandCursor
-        onClicked: root.openDetails()
+        acceptedButtons: Qt.LeftButton | Qt.RightButton
+        onClicked: function(mouse) {
+          if (mouse.button === Qt.RightButton) root.openAppearance()
+          else root.openDetails()
+        }
         onWheel: function(wheel) {
           if (wheel.angleDelta.y > 0) root.runAction("previous")
           else if (wheel.angleDelta.y < 0) root.runAction("next")
         }
-        onEntered: if (!root.opened) root.showTrackTooltip()
-        onExited: root.hideTrackTooltip()
       }
     }
 
     Column {
-      visible: root.hasMedia
+      visible: root.showingMedia
       anchors.horizontalCenter: parent.horizontalCenter
-      spacing: Style.space(1)
+      spacing: root.buttonSpacing
 
       MediaButton {
         action: "previous"
         iconText: "󰒮"
-        enabled: !!root.activePlayer && root.activePlayer.canGoPrevious
+        enabled: root.canGoPrevious
       }
       MediaButton {
         action: "playPause"
         iconText: root.playing ? "󰏤" : "󰐊"
-        enabled: !!root.activePlayer && (root.activePlayer.canTogglePlaying
-          || root.activePlayer.canPlay || root.activePlayer.canPause)
+        enabled: root.canPlayPause
       }
       MediaButton {
         action: "next"
         iconText: "󰒭"
-        enabled: !!root.activePlayer && root.activePlayer.canGoNext
+        enabled: root.canGoNext
       }
     }
   }
@@ -453,44 +529,17 @@ BarWidget {
     bar: root.bar
     controller: root
     controlsService: root.controlsService
-    integrationMode: root.integrationMode
-    showToccataDetails: root.showToccataDetails
     requestedOpen: root.opened
     onCloseRequested: root.close()
     onBrowserRequested: root.openBrowser()
     onNowPlayingRequested: root.browsing = false
   }
 
-  component Artwork: BorderSurface {
-    required property real extent
-    width: extent
-    height: extent
-    radius: 0
-    color: Style.normalFillFor(root.bar ? root.bar.foreground : Color.foreground, Color.accent)
-    borderSpec: Border.controlSpec("normal",
-      root.bar ? root.bar.foreground : Color.foreground, Color.accent)
-    clip: true
-
-    Image {
-      id: artworkImage
-      anchors.fill: parent
-      anchors.margins: Style.space(1)
-      source: root.artUrl
-      asynchronous: true
-      fillMode: Image.PreserveAspectCrop
-      sourceSize.width: Math.max(1, Math.round(width * Screen.devicePixelRatio))
-      sourceSize.height: Math.max(1, Math.round(height * Screen.devicePixelRatio))
-      visible: status === Image.Ready
-    }
-
-    Text {
-      anchors.centerIn: parent
-      visible: artworkImage.status !== Image.Ready
-      text: "󰝚"
-      color: root.bar ? root.bar.barForeground : Color.foreground
-      font.family: root.bar ? root.bar.fontFamily : Style.font.family
-      font.pixelSize: Style.font.title
-    }
+  component Artwork: TrackArtwork {
+    source: trackPresentation.displayedArtUrl
+    foreground: root.bar ? root.bar.barForeground : Color.foreground
+    fallbackFontFamily: root.bar ? root.bar.fontFamily : Style.font.family
+    transitionDuration: root.transitionDuration
   }
 
   component BrowserIcon: BorderSurface {
@@ -513,10 +562,12 @@ BarWidget {
 
   component MediaButton: Button {
     required property string action
+    implicitWidth: Math.min(root.barSize, Style.space(22))
+    implicitHeight: Math.max(Style.space(24), root.barSize - Style.space(8))
     foreground: root.bar ? root.bar.barForeground : Color.foreground
     fontFamily: root.bar ? root.bar.fontFamily : Style.font.family
     iconSize: Style.font.body
-    horizontalPadding: Style.space(4)
+    horizontalPadding: Style.space(3)
     verticalPadding: Style.space(2)
     opacity: enabled ? 1 : 0.38
     onClicked: root.runAction(action)

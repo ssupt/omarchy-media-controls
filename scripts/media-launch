@@ -59,7 +59,6 @@ def launch_response(status: str, backend: str, expects_mpris: bool, message: str
 
 def capabilities() -> dict:
     return {
-        "toccataInstalled": executable("MEDIA_CONTROLS_TOCCATA", "toccata") is not None,
         "mpvInstalled": executable("MEDIA_CONTROLS_MPV", "mpv") is not None,
         "xdgOpenInstalled": executable("MEDIA_CONTROLS_XDG_OPEN", "xdg-open") is not None,
     }
@@ -399,89 +398,14 @@ def launch_with_mpv(mpv: str, playlist: Path, selected_index: int) -> tuple[bool
         return False, False, str(error)
 
 
-def toccata_status() -> dict:
-    toccata = executable("MEDIA_CONTROLS_TOCCATA", "toccata")
-    if not toccata:
-        return launch_response("error", "toccata", False, "Toccata is not installed.")
-    try:
-        completed = subprocess.run(
-            [toccata, "status", "--json"], capture_output=True, text=True,
-            check=False, timeout=5,
-        )
-    except (OSError, subprocess.SubprocessError) as error:
-        return launch_response("error", "toccata", False, f"Could not read Toccata status: {error}")
-    if completed.returncode != 0:
-        detail = (completed.stderr or completed.stdout).strip()
-        return launch_response(
-            "error", "toccata", False,
-            f"Toccata status was unavailable{': ' + detail if detail else '.'}",
-        )
-    try:
-        status = json.loads(completed.stdout)
-    except json.JSONDecodeError:
-        return launch_response("error", "toccata", False, "Toccata returned invalid status data.")
-    try:
-        version = int(status.get("version", 0)) if isinstance(status, dict) else 0
-    except (TypeError, ValueError):
-        version = 0
-    if version < 1:
-        return launch_response("error", "toccata", False, "Toccata returned unsupported status data.")
-    return {
-        "status": "accepted",
-        "backend": "toccata",
-        "expectsMpris": True,
-        "message": "",
-        "toccata": status,
-    }
-
-
-def show_toccata() -> dict:
-    toccata = executable("MEDIA_CONTROLS_TOCCATA", "toccata")
-    if not toccata:
-        return launch_response("error", "toccata", False, "Toccata is not installed.")
-    try:
-        completed = subprocess.run(
-            [toccata, "show"], capture_output=True, text=True, check=False, timeout=8,
-        )
-    except (OSError, subprocess.SubprocessError) as error:
-        return launch_response("error", "toccata", False, f"Could not open Toccata: {error}")
-    if completed.returncode != 0:
-        detail = (completed.stderr or completed.stdout).strip()
-        return launch_response(
-            "error", "toccata", False,
-            f"Toccata could not be opened{': ' + detail if detail else '.'}",
-        )
-    return launch_response("accepted", "toccata", True, "Toccata opened.")
-
-
 def launch(
     root: Path,
     target: Path,
     tracks: list[Path],
     selected_index: int,
     kind: str,
-    toccata_mode: str,
-    toccata_active: bool,
 ) -> dict:
     failures: list[str] = []
-    toccata = executable("MEDIA_CONTROLS_TOCCATA", "toccata")
-    use_toccata = toccata is not None and (
-        toccata_mode == "prefer" or (toccata_mode == "auto" and toccata_active)
-    )
-    if use_toccata:
-        context = "siblings" if kind == "file" else "recursive"
-        try:
-            completed = subprocess.run(
-                [toccata, "play", "--mode=replace", f"--context={context}", "--no-raise", "--", str(target)],
-                capture_output=True, text=True, check=False, timeout=12,
-            )
-            if completed.returncode == 0:
-                return launch_response("accepted", "toccata", True, "Starting in Toccata…")
-            detail = (completed.stderr or completed.stdout).strip()
-            failures.append(f"Toccata rejected the request{': ' + detail if detail else ''}")
-        except (OSError, subprocess.SubprocessError) as error:
-            failures.append(f"Toccata could not be started: {error}")
-
     mpv = executable("MEDIA_CONTROLS_MPV", "mpv")
     if mpv:
         try:
@@ -511,10 +435,6 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Safely launch music from the Omarchy media browser")
     parser.add_argument("--resolve-root", action="store_true")
     parser.add_argument("--validate-only", action="store_true")
-    parser.add_argument("--toccata-status", action="store_true")
-    parser.add_argument("--show-toccata", action="store_true")
-    parser.add_argument("--toccata-mode", choices=("off", "auto", "prefer"), default="auto")
-    parser.add_argument("--toccata-active", action="store_true")
     parser.add_argument("--root")
     parser.add_argument("--target")
     parser.add_argument("--kind", choices=("file", "folder"))
@@ -532,14 +452,6 @@ def main() -> int:
                 "status": "error", "root": "", "message": str(error), **detected,
             }, 1)
 
-    if args.toccata_status:
-        result = toccata_status()
-        return emit(result, 0 if result["status"] == "accepted" else 1)
-
-    if args.show_toccata:
-        result = show_toccata()
-        return emit(result, 0 if result["status"] == "accepted" else 1)
-
     if not args.root or not args.target or not args.kind:
         return emit(launch_response("error", "xdg-open", False, "root, target, and kind are required"), 2)
     try:
@@ -550,7 +462,7 @@ def main() -> int:
         return emit({"status": "accepted", "target": str(target),
                      "firstTrack": str(tracks[selected_index]), "message": ""})
     result = launch(
-        root, target, tracks, selected_index, args.kind, args.toccata_mode, args.toccata_active
+        root, target, tracks, selected_index, args.kind
     )
     return emit(result, 0 if result["status"] == "accepted" else 1)
 

@@ -5,6 +5,7 @@ import QtQml.Models
 import Qt.labs.folderlistmodel
 import qs.Commons
 import "../Model.js" as Model
+import "../components"
 import "../style"
 
 FocusScope {
@@ -13,16 +14,13 @@ FocusScope {
   required property var service
   required property var bar
   required property var monument
-  property string integrationMode: "auto"
 
   readonly property string musicRoot: service ? String(service.musicRoot || "") : ""
   readonly property string rootUrl: Model.pathToFileUrl(musicRoot)
   property string currentFolder: rootUrl
   readonly property bool atRoot: currentFolder === rootUrl
-  readonly property bool toccataRouteActive: integrationMode !== "off"
-    && !!service && service.toccataConnected
   readonly property bool busy: service && (service.launchState === "validating"
-    || service.launchState === "launching" || service.launchState === "waiting")
+    || service.launchState === "launching")
   implicitWidth: 480
   implicitHeight: 560
 
@@ -31,16 +29,6 @@ FocusScope {
 
   function currentPath() {
     return Model.fileUrlToPath(currentFolder)
-  }
-
-  function routeLabel() {
-    if (integrationMode === "off") return "GENERIC MPRIS / TOCCATA DISABLED"
-    if (service && service.toccataConnected) return "TOCCATA LINK ACTIVE"
-    if (integrationMode === "prefer") {
-      return service && service.toccataInstalled
-        ? "TOCCATA PREFERRED / FALLBACK READY" : "TOCCATA UNAVAILABLE / FALLBACK READY"
-    }
-    return "AUTO ROUTING / GENERIC FALLBACK READY"
   }
 
   function sourceRow(proxyRow) {
@@ -62,7 +50,7 @@ FocusScope {
 
   function launchEntry(entry) {
     if (!entry || !service) return
-    service.launchPath(entry.path, entry.folder ? "folder" : "file", integrationMode)
+    service.launchPath(entry.path, entry.folder ? "folder" : "file")
   }
 
   function activateSelection(recursiveFolder) {
@@ -85,8 +73,6 @@ FocusScope {
     currentFolder = rootUrl
     browser.currentIndex = folderModel.count > 0 ? 0 : -1
   }
-
-  onVisibleChanged: if (visible) archiveTabs.currentIndex = 1
 
   Keys.onPressed: function(event) {
     if (event.key === Qt.Key_Up) {
@@ -171,30 +157,6 @@ FocusScope {
         : root.busy ? root.monument.warning : root.monument.alive
     }
 
-    TabBar {
-      id: archiveTabs
-      Layout.fillWidth: true
-      implicitHeight: 42
-      spacing: 2
-      currentIndex: 1
-      background: Rectangle { color: root.monument.ground }
-      onCurrentIndexChanged: if (currentIndex === 0) root.transmissionRequested()
-
-      MonumentTabButton {
-        width: (archiveTabs.width - archiveTabs.spacing) / 2
-        monument: root.monument
-        code: "01"
-        text: "Transmission"
-      }
-
-      MonumentTabButton {
-        width: (archiveTabs.width - archiveTabs.spacing) / 2
-        monument: root.monument
-        code: "02"
-        text: "Archive"
-      }
-    }
-
     RowLayout {
       Layout.fillWidth: true
       spacing: 6
@@ -236,30 +198,7 @@ FocusScope {
         enabled: root.musicRoot !== "" && !root.busy
         Accessible.name: "Play current folder recursively"
         onClicked: if (root.service)
-          root.service.launchPath(root.currentPath(), "folder", root.integrationMode)
-      }
-    }
-
-    RowLayout {
-      Layout.fillWidth: true
-      spacing: 7
-
-      Rectangle {
-        Layout.preferredWidth: 5
-        Layout.preferredHeight: 5
-        color: root.toccataRouteActive
-          ? root.monument.alive : root.monument.inkFaint
-      }
-
-      Text {
-        Layout.fillWidth: true
-        text: "OUTPUT ROUTE // " + root.routeLabel()
-        color: root.toccataRouteActive
-          ? root.monument.alive : root.monument.inkFaint
-        font.family: root.monument.machineFont
-        font.pixelSize: 9
-        font.letterSpacing: 0.6
-        elide: Text.ElideRight
+          root.service.launchPath(root.currentPath(), "folder")
       }
     }
 

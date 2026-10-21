@@ -40,28 +40,17 @@ Item {
 
   property string musicRoot: ""
   property string musicRootMessage: "Resolving the Music folder…"
-  property bool toccataInstalled: false
-  readonly property bool toccataConnected: toccataPlayer() !== null
-  readonly property bool activeIsToccata: isToccataPlayer(activePlayer)
-  property var toccataStatus: ({})
-  property string toccataStatusState: "idle"
-  property string toccataStatusMessage: ""
-  property bool toccataStatusHandled: false
-  property bool toccataShowHandled: false
   property string launchState: "idle"
   property string launchBackend: ""
   property string launchMessage: ""
   property string launchTarget: ""
-  property string launchFirstTrack: ""
   property string launchKind: ""
-  property string launchToccataMode: "auto"
   property string pausedPlayerKey: ""
   property bool pausedPlayerWasPlaying: false
-  property string toccataSignatureBeforeLaunch: ""
   property bool validateHandled: false
   property bool launchHandled: false
 
-  signal handoffSucceeded()
+  signal playbackStarted()
   signal launchResultChanged()
 
   function pluginScript(name) {
@@ -74,21 +63,6 @@ Item {
     musicRootMessage = "Resolving the Music folder…"
     rootProc.command = [pluginScript("media-launch"), "--resolve-root"]
     rootProc.running = true
-  }
-
-  function isToccataPlayer(player) {
-    if (!player) return false
-    var key = playerKey(player).toLowerCase()
-    return key === "org.mpris.mediaplayer2.toccata"
-      || key.indexOf("org.mpris.mediaplayer2.toccata.") === 0
-      || String(player.desktopEntry || "").toLowerCase() === "io.github.ssupt.toccata"
-  }
-
-  function toccataPlayer() {
-    for (var i = 0; i < players.length; i++) {
-      if (isToccataPlayer(players[i])) return players[i]
-    }
-    return null
   }
 
   function pauseForHandoff() {
@@ -114,19 +88,17 @@ Item {
     pausedPlayerWasPlaying = false
   }
 
-  function launchPath(target, kind, toccataMode) {
+  function launchPath(target, kind) {
     if (musicRoot === "") {
       launchState = "error"
       launchMessage = musicRootMessage || "The Music folder is unavailable."
       launchResultChanged()
       return false
     }
-    if (launchState === "validating" || launchState === "launching" || launchState === "waiting")
+    if (launchState === "validating" || launchState === "launching")
       return false
     launchTarget = String(target || "")
-    launchFirstTrack = ""
     launchKind = String(kind || "")
-    launchToccataMode = Model.toccataIntegrationMode(toccataMode)
     launchBackend = ""
     launchMessage = "Checking the selection…"
     launchState = "validating"
@@ -139,15 +111,12 @@ Item {
   }
 
   function beginValidatedLaunch() {
-    toccataSignatureBeforeLaunch = Model.trackSignature(toccataPlayer())
     pauseForHandoff()
     launchState = "launching"
     launchMessage = "Starting playback…"
     launchHandled = false
     var command = [pluginScript("media-launch"), "--root", musicRoot,
-      "--target", launchTarget, "--kind", launchKind,
-      "--toccata-mode", launchToccataMode]
-    if (launchToccataMode === "auto" && toccataConnected) command.push("--toccata-active")
+      "--target", launchTarget, "--kind", launchKind]
     launchProc.command = command
     launchProc.running = true
     launchResultChanged()
@@ -156,94 +125,20 @@ Item {
   function handleLaunchResponse(payload) {
     if (launchHandled) return
     launchHandled = true
+    launchBackend = String(payload.backend || "")
+    launchMessage = String(payload.message || "Playback request accepted.")
     if (payload.status !== "accepted") {
       resumePausedPlayer()
       launchState = "error"
-      launchBackend = String(payload.backend || "")
       launchMessage = String(payload.message || "Could not start playback.")
-      launchResultChanged()
-      return
-    }
-    launchBackend = String(payload.backend || "")
-    launchMessage = String(payload.message || "Playback request accepted.")
-    if (payload.expectsMpris && launchBackend === "toccata") {
-      launchState = "waiting"
-      handoffTimeout.restart()
-      toccataPoll.start()
-      tryToccataHandoff()
     } else {
       if (launchBackend === "xdg-open" && launchKind === "folder") resumePausedPlayer()
       pausedPlayerKey = ""
       pausedPlayerWasPlaying = false
-      toccataSignatureBeforeLaunch = ""
       launchState = "success"
-      launchResultChanged()
     }
-  }
-
-  function tryToccataHandoff() {
-    if (launchState !== "waiting") return false
-    var player = toccataPlayer()
-    if (!player || !player.isPlaying || !hasTrackMetadata(player)) return false
-    var metadataUrl = Model.metadataText(player.metadata || {}, "xesam:url")
-    var targetPath = Model.fileUrlToPath(metadataUrl)
-    var targetMatches = targetPath !== "" && targetPath === (launchFirstTrack || launchTarget)
-    if (targetPath !== "" && !targetMatches) return false
-    if (!targetMatches && Model.trackSignature(player) === toccataSignatureBeforeLaunch)
-      return false
-    preferredPlayerKey = playerKey(player)
-    pausedPlayerKey = ""
-    pausedPlayerWasPlaying = false
-    toccataSignatureBeforeLaunch = ""
-    launchState = "success"
-    launchBackend = "toccata"
-    launchMessage = "Now playing with Toccata."
-    handoffTimeout.stop()
-    toccataPoll.stop()
     launchResultChanged()
-    handoffSucceeded()
-    return true
-  }
-
-  function requestToccataStatus() {
-    if (!toccataInstalled || !activeIsToccata || toccataStatusProc.running) return false
-    toccataStatusHandled = false
-    toccataStatusState = "loading"
-    toccataStatusMessage = ""
-    toccataStatusProc.command = [pluginScript("media-launch"), "--toccata-status"]
-    toccataStatusProc.running = true
-    return true
-  }
-
-  function handleToccataStatusResponse(payload) {
-    if (toccataStatusHandled) return
-    toccataStatusHandled = true
-    if (payload.status === "accepted" && payload.toccata) {
-      toccataStatus = payload.toccata
-      toccataStatusState = "ready"
-      toccataStatusMessage = ""
-    } else {
-      toccataStatus = ({})
-      toccataStatusState = "error"
-      toccataStatusMessage = String(payload.message || "Toccata status is unavailable.")
-    }
-  }
-
-  function showToccata() {
-    if (!toccataInstalled || toccataShowProc.running) return false
-    toccataShowHandled = false
-    toccataShowProc.command = [pluginScript("media-launch"), "--show-toccata"]
-    toccataShowProc.running = true
-    return true
-  }
-
-  function handleToccataShowResponse(payload) {
-    if (toccataShowHandled) return
-    toccataShowHandled = true
-    if (payload.status === "accepted") {
-      toccataInstalled = true
-      toccataStatusMessage = ""
-    } else toccataStatusMessage = String(payload.message || "Toccata could not be opened.")
+    if (launchState === "success" && launchBackend === "mpv") playbackStarted()
   }
 
   function isProxyPlayer(player) {
@@ -426,15 +321,6 @@ Item {
   }
 
   onTrackSignatureChanged: refreshTrack()
-  onActiveIsToccataChanged: {
-    if (!activeIsToccata) {
-      if (toccataStatusProc.running) toccataStatusProc.running = false
-      toccataStatusHandled = true
-      toccataStatus = ({})
-      toccataStatusState = "idle"
-      toccataStatusMessage = ""
-    }
-  }
   onPrimaryArtUrlChanged: {
     if (primaryArtUrl !== "") {
       coverDelay.stop()
@@ -446,27 +332,6 @@ Item {
   Component.onCompleted: {
     refreshTrack()
     resolveMusicRoot()
-  }
-
-  Timer {
-    id: handoffTimeout
-    interval: 8000
-    repeat: false
-    onTriggered: {
-      if (root.launchState !== "waiting") return
-      toccataPoll.stop()
-      root.resumePausedPlayer()
-      root.launchState = "error"
-      root.launchMessage = "Toccata did not expose playable media within eight seconds. The previous player was resumed."
-      root.launchResultChanged()
-    }
-  }
-
-  Timer {
-    id: toccataPoll
-    interval: 100
-    repeat: true
-    onTriggered: root.tryToccataHandoff()
   }
 
   Timer {
@@ -522,7 +387,6 @@ Item {
       waitForEnd: true
       onStreamFinished: {
         var payload = Model.parseHelperResponse(text)
-        root.toccataInstalled = !!payload.toccataInstalled
         if (payload.status === "accepted" && payload.root) {
           root.musicRoot = String(payload.root)
           root.musicRootMessage = ""
@@ -544,7 +408,6 @@ Item {
         var payload = Model.parseHelperResponse(text)
         if (payload.status === "accepted") {
           root.launchTarget = String(payload.target || root.launchTarget)
-          root.launchFirstTrack = String(payload.firstTrack || "")
           root.beginValidatedLaunch()
         }
         else {
@@ -574,32 +437,6 @@ Item {
       if (exitCode !== 0 && !root.launchHandled)
         root.handleLaunchResponse({ status: "error", backend: "", expectsMpris: false,
           message: "The music launcher exited before accepting playback." })
-    }
-  }
-
-  Process {
-    id: toccataStatusProc
-    stdout: StdioCollector {
-      waitForEnd: true
-      onStreamFinished: root.handleToccataStatusResponse(Model.parseHelperResponse(text))
-    }
-    onExited: function(exitCode) {
-      if (exitCode !== 0 && !root.toccataStatusHandled)
-        root.handleToccataStatusResponse({ status: "error",
-          message: "Toccata status could not be read." })
-    }
-  }
-
-  Process {
-    id: toccataShowProc
-    stdout: StdioCollector {
-      waitForEnd: true
-      onStreamFinished: root.handleToccataShowResponse(Model.parseHelperResponse(text))
-    }
-    onExited: function(exitCode) {
-      if (exitCode !== 0 && !root.toccataShowHandled)
-        root.handleToccataShowResponse({ status: "error",
-          message: "Toccata could not be opened." })
     }
   }
 

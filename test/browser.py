@@ -27,10 +27,8 @@ Item {
     property string musicRootMessage: "Unavailable"
     property string launchState: "idle"
     property string launchMessage: ""
-    property bool toccataConnected: false
-    property bool toccataInstalled: false
     property var launched: null
-    function launchPath(path, kind, mode) { launched = [path, kind, mode] }
+    function launchPath(path, kind) { launched = [path, kind] }
   }
 
   Visuals.MonumentStyle { id: monument }
@@ -87,7 +85,6 @@ Item {
       archive.activateSelection(false)
       compare(service.launched[0], service.musicRoot + "/2 song.MP3")
       compare(service.launched[1], "file")
-      compare(service.launched[2], "auto")
 
       list.currentIndex = 1
       archive.activateSelection(true)
